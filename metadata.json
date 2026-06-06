@@ -1,0 +1,10 @@
+{
+  "name": "GlowAI",
+  "description": "An interactive, professional AI dermatologist and personalized skincare routine planner with an immersive scanner.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
