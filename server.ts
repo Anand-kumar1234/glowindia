@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
 
@@ -22,6 +23,7 @@ interface Session {
   paymentVerified: boolean;
   utr?: string;
   scansRemaining?: number;
+  lastScanImage?: string;
 }
 
 interface UserProfile {
@@ -34,6 +36,7 @@ interface UserProfile {
   paymentVerified: boolean;
   utr?: string;
   scansRemaining?: number;
+  lastScanImage?: string;
 }
 
 const sessions: Record<string, Session> = {};
@@ -56,13 +59,119 @@ const usersDb: Record<string, UserProfile> = {
   }
 };
 
+interface PendingPayment {
+  sessionId: string;
+  utr: string;
+  email: string;
+  name: string;
+  age?: number;
+  concern?: string;
+  submittedAt: number;
+  autoApproveAt: number;
+  completed: boolean;
+}
+
+// Thread-safe in-memory heap to track customer verifications
+const pendingPayments: Record<string, PendingPayment> = {};
+
+// --- PERSISTENCE LAYER ---
+const STORAGE_DIR = path.join(process.cwd(), "db_storage");
+
+if (!fs.existsSync(STORAGE_DIR)) {
+  try {
+    fs.mkdirSync(STORAGE_DIR, { recursive: true });
+  } catch (err) {
+    console.warn("Failed to create storage directory:", err);
+  }
+}
+
+const USERS_DB_FILE = path.join(STORAGE_DIR, "users_db.json");
+const SESSIONS_FILE = path.join(STORAGE_DIR, "sessions.json");
+const PENDING_PAYMENTS_FILE = path.join(STORAGE_DIR, "pending_payments.json");
+const VERIFIED_UTRS_FILE = path.join(STORAGE_DIR, "verified_utrs.json");
+
+function saveDb() {
+  try {
+    fs.writeFileSync(USERS_DB_FILE, JSON.stringify(usersDb, null, 2), "utf8");
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), "utf8");
+    fs.writeFileSync(PENDING_PAYMENTS_FILE, JSON.stringify(pendingPayments, null, 2), "utf8");
+    fs.writeFileSync(VERIFIED_UTRS_FILE, JSON.stringify(Array.from(verifiedUTRs), null, 2), "utf8");
+    console.log("💾 [GlowAI Persistence]: Successfully autosaved databases to disk.");
+  } catch (err) {
+    console.warn("⚠️ Failed to autosave variables to disk:", err);
+  }
+}
+
+function loadDb() {
+  try {
+    if (fs.existsSync(USERS_DB_FILE)) {
+      const data = fs.readFileSync(USERS_DB_FILE, "utf8");
+      const loaded = JSON.parse(data);
+      Object.assign(usersDb, loaded);
+      console.log(`Loaded ${Object.keys(usersDb).length} custom user profiles from disk.`);
+    }
+    if (fs.existsSync(SESSIONS_FILE)) {
+      const data = fs.readFileSync(SESSIONS_FILE, "utf8");
+      const loaded = JSON.parse(data);
+      Object.assign(sessions, loaded);
+      console.log(`Loaded ${Object.keys(sessions).length} sessions from disk.`);
+    }
+    if (fs.existsSync(PENDING_PAYMENTS_FILE)) {
+      const data = fs.readFileSync(PENDING_PAYMENTS_FILE, "utf8");
+      const loaded = JSON.parse(data);
+      Object.assign(pendingPayments, loaded);
+      console.log(`Loaded ${Object.keys(pendingPayments).length} pending payments from disk.`);
+    }
+    if (fs.existsSync(VERIFIED_UTRS_FILE)) {
+      const data = fs.readFileSync(VERIFIED_UTRS_FILE, "utf8");
+      const loaded = JSON.parse(data);
+      if (Array.isArray(loaded)) {
+        loaded.forEach(utr => verifiedUTRs.add(utr));
+        console.log(`Loaded ${verifiedUTRs.size} verified UTRs from disk.`);
+      }
+    }
+  } catch (err) {
+    console.warn("⚠️ Failed to load database files from disk:", err);
+  }
+}
+
+// Immediately load database records on application startup
+loadDb();
+
+// Express interceptor middleware to automatically save databases on successful POST/action mutations (including registration & auth)
+app.use((req, res, next) => {
+  res.on("finish", () => {
+    if (req.method === "POST" && res.statusCode < 400) {
+      saveDb();
+    }
+  });
+  next();
+});
+
+// Helper to check if API key is present and validly formatted (not a placeholder or string artifact)
+function isValidApiKey(key: string | undefined): boolean {
+  if (!key) return false;
+  const cleanKey = key.trim();
+  if (
+    cleanKey === "" ||
+    cleanKey === "undefined" ||
+    cleanKey === "null" ||
+    cleanKey === "PLACEHOLDER" ||
+    cleanKey.includes("your-api-key") ||
+    cleanKey.length < 10
+  ) {
+    return false;
+  }
+  return true;
+}
+
 // Initialize Gemini client on the server side
 let ai: GoogleGenAI | null = null;
 try {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (apiKey) {
+  if (isValidApiKey(apiKey)) {
     ai = new GoogleGenAI({
-      apiKey,
+      apiKey: apiKey!.trim(),
       httpOptions: {
         headers: {
           "User-Agent": "aistudio-build",
@@ -70,7 +179,7 @@ try {
       },
     });
   } else {
-    console.warn("GEMINI_API_KEY is not defined in the environment. AI scanning will be unavailable until added.");
+    console.warn("GEMINI_API_KEY is not configured or is a placeholder. Clinical fallback modes will be used.");
   }
 } catch (error) {
   console.error("Failed to initialize GoogleGenAI client:", error);
@@ -79,13 +188,13 @@ try {
 // Helper to get Gemini client or throw
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
+  if (!isValidApiKey(apiKey)) {
     throw new Error(
-      "Gemini API Client is not configured. Please add GEMINI_API_KEY in the Secrets panel."
+      "Gemini API Client is not configured. Please add a valid GEMINI_API_KEY in the Secrets panel."
     );
   }
   return new GoogleGenAI({
-    apiKey,
+    apiKey: apiKey!.trim(),
     httpOptions: {
       headers: {
         "User-Agent": "aistudio-build",
@@ -113,14 +222,14 @@ app.post("/api/auth/session", (req, res) => {
       if (pending && !pending.completed && Date.now() >= pending.autoApproveAt) {
         pending.completed = true;
         session.paymentVerified = true;
-        session.scansRemaining = 2;
+        session.scansRemaining = 5;
         session.utr = pending.utr;
         verifiedUTRs.add(pending.utr);
         
         if (usersDb[session.email]) {
           usersDb[session.email].paymentVerified = true;
           usersDb[session.email].utr = pending.utr;
-          usersDb[session.email].scansRemaining = 2;
+          usersDb[session.email].scansRemaining = 5;
         }
 
         const ist = getISTDateTime();
@@ -135,8 +244,8 @@ app.post("/api/auth/session", (req, res) => {
         });
       }
 
-      if (session.paymentVerified && session.scansRemaining === undefined) {
-        session.scansRemaining = 2;
+      if (session.scansRemaining === undefined) {
+        session.scansRemaining = 5;
       }
       
       res.json({ authenticated: true, user: session });
@@ -151,7 +260,7 @@ app.post("/api/auth/session", (req, res) => {
 
 // 2. Email Sign-Up Endpoint
 app.post("/api/auth/register", (req, res) => {
-  const { email, password, name } = req.body;
+  const { email, password, name, picture } = req.body;
 
   if (!email || !password || !name) {
     return res.status(400).json({ error: "Please fill in all registration parameters (Name, Email, password)" });
@@ -163,13 +272,14 @@ app.post("/api/auth/register", (req, res) => {
   }
 
   // Register in user db
-  const picture = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(name)}`;
+  const defaultPicture = `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(name)}`;
   const newUser: UserProfile = {
     email: normalizedEmail,
     password,
     name,
-    picture,
+    picture: picture || defaultPicture,
     paymentVerified: false,
+    scansRemaining: 5,
   };
   usersDb[normalizedEmail] = newUser;
 
@@ -181,6 +291,7 @@ app.post("/api/auth/register", (req, res) => {
     email: newUser.email,
     picture: newUser.picture,
     paymentVerified: newUser.paymentVerified,
+    scansRemaining: newUser.scansRemaining,
   };
 
   res.json({ success: true, sessionId, user: sessions[sessionId] });
@@ -212,6 +323,8 @@ app.post("/api/auth/email-login", (req, res) => {
     concern: registeredUser.concern,
     paymentVerified: registeredUser.paymentVerified,
     utr: registeredUser.utr,
+    lastScanImage: registeredUser.lastScanImage,
+    scansRemaining: registeredUser.scansRemaining !== undefined ? registeredUser.scansRemaining : 5,
   };
 
   res.json({ success: true, sessionId, user: sessions[sessionId] });
@@ -235,6 +348,7 @@ app.post("/api/auth/login", (req, res) => {
       name,
       picture: picture || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(name)}`,
       paymentVerified: false,
+      scansRemaining: 5,
     };
     usersDb[normalizedEmail] = userProfile;
   }
@@ -250,6 +364,8 @@ app.post("/api/auth/login", (req, res) => {
     concern: userProfile.concern,
     paymentVerified: userProfile.paymentVerified,
     utr: userProfile.utr,
+    lastScanImage: userProfile.lastScanImage,
+    scansRemaining: userProfile.scansRemaining !== undefined ? userProfile.scansRemaining : 5,
   };
 
   res.json({ success: true, sessionId, user: sessions[sessionId] });
@@ -257,7 +373,7 @@ app.post("/api/auth/login", (req, res) => {
 
 // 5. Save details (sync back to usersDb of registered user!)
 app.post("/api/auth/save-details", (req, res) => {
-  const { sessionId, age, concern, name } = req.body;
+  const { sessionId, age, concern, name, picture } = req.body;
   if (!sessionId || !sessions[sessionId]) {
     return res.status(401).json({ error: "Unauthorized session" });
   }
@@ -268,12 +384,18 @@ app.post("/api/auth/save-details", (req, res) => {
   if (name) {
     session.name = name;
   }
+  if (picture) {
+    session.picture = picture;
+  }
 
   // Feed update back to persistent records
   if (usersDb[session.email]) {
     usersDb[session.email].age = session.age;
     usersDb[session.email].concern = session.concern;
     usersDb[session.email].name = session.name;
+    if (picture) {
+      usersDb[session.email].picture = picture;
+    }
   }
 
   // Trigger real-time fail-safe WhatsApp notification signal so administrator is immediately alerted of saved patient demographics
@@ -373,21 +495,6 @@ async function sendWhatsAppNotification(details: {
   }
 }
 
-interface PendingPayment {
-  sessionId: string;
-  utr: string;
-  email: string;
-  name: string;
-  age?: number;
-  concern?: string;
-  submittedAt: number;
-  autoApproveAt: number;
-  completed: boolean;
-}
-
-// Thread-safe in-memory heap to track customer verifications
-const pendingPayments: Record<string, PendingPayment> = {};
-
 // 6. Verify Payment (Instant UTR verification & logging tool)
 app.post("/api/payment/verify", (req, res) => {
   try {
@@ -410,13 +517,13 @@ app.post("/api/payment/verify", (req, res) => {
 
     // Directly and instantly approve the patient's payment access key
     session.paymentVerified = true;
-    session.scansRemaining = 2;
+    session.scansRemaining = 5;
     session.utr = utr;
     verifiedUTRs.add(utr);
 
     if (usersDb[session.email]) {
       usersDb[session.email].paymentVerified = true;
-      usersDb[session.email].scansRemaining = 2;
+      usersDb[session.email].scansRemaining = 5;
       usersDb[session.email].utr = utr;
     }
 
@@ -479,13 +586,13 @@ app.post("/api/payment/status", (req, res) => {
     if (!pending.completed && Date.now() >= pending.autoApproveAt) {
       pending.completed = true;
       session.paymentVerified = true;
-      session.scansRemaining = 2;
+      session.scansRemaining = 5;
       session.utr = pending.utr;
       verifiedUTRs.add(pending.utr);
 
       if (usersDb[session.email]) {
         usersDb[session.email].paymentVerified = true;
-        usersDb[session.email].scansRemaining = 2;
+        usersDb[session.email].scansRemaining = 5;
         usersDb[session.email].utr = pending.utr;
       }
 
@@ -548,7 +655,7 @@ app.post("/api/payment/admin-override", (req, res) => {
     if (action === "approve") {
       if (targetSession) {
         targetSession.paymentVerified = true;
-        targetSession.scansRemaining = 2;
+        targetSession.scansRemaining = 5;
         if (pending) {
           targetSession.utr = pending.utr;
         }
@@ -557,7 +664,7 @@ app.post("/api/payment/admin-override", (req, res) => {
       // Update in database record
       if (usersDb[targetEmail]) {
         usersDb[targetEmail].paymentVerified = true;
-        usersDb[targetEmail].scansRemaining = 2;
+        usersDb[targetEmail].scansRemaining = 5;
         if (pending) {
           usersDb[targetEmail].utr = pending.utr;
         } else if (!usersDb[targetEmail].utr) {
@@ -620,7 +727,8 @@ app.post("/api/admin/records", (req, res) => {
         paymentVerified: user.paymentVerified,
         utr: user.utr,
         scansRemaining: user.scansRemaining,
-        picture: user.picture
+        picture: user.picture,
+        lastScanImage: user.lastScanImage
       })),
       pending: Object.values(pendingPayments).map(p => ({
         sessionId: p.sessionId,
@@ -648,12 +756,19 @@ app.post("/api/analyze", async (req, res) => {
     }
 
     const user = sessions[sessionId];
-    if (!user.paymentVerified) {
-      return res.status(403).json({ error: "Payment verification required to unlock scanner analysis." });
+    if (!user.paymentVerified && (user.scansRemaining ?? 0) <= 0) {
+      return res.status(403).json({ error: "No scans or free trials remaining. Please complete payment verification to unlock the scanner." });
     }
 
     if (!base64Image) {
       return res.status(400).json({ error: "Missing frame capture data" });
+    }
+
+    // Save scan snapshot as data URL in session and user database profile
+    const dataUrl = base64Image.startsWith("data:") ? base64Image : `data:image/jpeg;base64,${base64Image}`;
+    user.lastScanImage = dataUrl;
+    if (usersDb[user.email]) {
+      usersDb[user.email].lastScanImage = dataUrl;
     }
 
     let analysisResult: any = null;
@@ -782,7 +897,14 @@ The JSON must contain:
       analysisResult.isFallback = false;
 
     } catch (apiError: any) {
-      console.warn("Gemini API call failed, activating GlowAI high-fidelity offline fallback:", apiError?.message || apiError);
+      const errStr = JSON.stringify(apiError) || apiError?.message || "";
+      const isUnauthenticated = errStr.includes("UNAUTHENTICATED") || errStr.includes("401") || errStr.includes("invalid authentication") || errStr.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED");
+      
+      if (isUnauthenticated) {
+        console.warn("💡 INFO [GlowAI]: Instantiating Offline Diagnostic Fallback (High-Fidelity) because the active GEMINI_API_KEY is either unauthenticated, expired, or invalid. Please configure a valid GEMINI_API_KEY in the Secrets panel of Google AI Studio for live multi-spectral scan capabilities.");
+      } else {
+        console.warn("Gemini API call failed, activating GlowAI high-fidelity offline fallback:", apiError?.message || apiError);
+      }
       
       // Select appropriate clinical fallback preset based on user preference to provide premium, tailored results
       const userConcern = user.concern || "General Skin Analysis";
@@ -939,9 +1061,9 @@ The JSON must contain:
       analysisResult.skin_health_summary += " [Empathetic evaluation generated seamlessly via GlowAI Dermatological Suite fallback due to temporary cloud traffic, ensuring clinical uptime.]";
     }
 
-    // Decrement skin scans count (Once paid, user can scan exactly 2 times, then asked to pay again)
+    // Decrement skin scans count (Once paid or trial active, user can scan exactly 5 times, then asked to pay again)
     if (user.scansRemaining === undefined) {
-      user.scansRemaining = 2;
+      user.scansRemaining = 5;
     }
     user.scansRemaining = Math.max(0, user.scansRemaining - 1);
     
@@ -952,7 +1074,7 @@ The JSON must contain:
         usersDb[user.email].paymentVerified = false;
         usersDb[user.email].scansRemaining = 0;
       }
-      console.log(`[PAYMENT REVOQUE] User ${user.email} has exhausted 2 scans. Scanner lock activated. Pay ₹15 for more.`);
+      console.log(`[PAYMENT REQUIRED] User ${user.email} has exhausted 5 scans. Scanner lock activated. Pay ₹15 for more.`);
     } else {
       if (usersDb[user.email]) {
         usersDb[user.email].scansRemaining = user.scansRemaining;
@@ -963,6 +1085,82 @@ The JSON must contain:
   } catch (error: any) {
     console.error("Dermatologist analysis error:", error);
     res.status(500).json({ error: error?.message || "Analysis failed due to server error" });
+  }
+});
+
+// 10. WhatsApp AI Dermatologist Bot Chat Endpoint
+app.post("/api/whatsapp/chat", async (req, res) => {
+  try {
+    const { sessionId, message, history } = req.body;
+
+    if (!sessionId || !sessions[sessionId]) {
+      return res.status(401).json({ error: "Unauthorized session. Please log in first." });
+    }
+
+    const session = sessions[sessionId];
+
+    if (!message) {
+      return res.status(400).json({ error: "Missing message payload" });
+    }
+
+    // Build history chat structure for Gemini client
+    let replyText = "";
+    try {
+      const gemini = getGeminiClient();
+
+      // We form a message list for Gemini contents
+      const systemInstruction = `You are "GlowAI WhatsApp Dermatologist Bot (+91 62011 86100)".
+A patient named ${session.name} (Age: ${session.age || "Unknown"}, skin concern: ${session.concern || "General analysis"}) is chatting with you on WhatsApp.
+Provide clear, scientific, yet friendly skincare guidance.
+Rules for responses:
+- Keep the response concise, punchy, and structured (WhatsApp style, 2-3 short paragraphs max).
+- Use rich formatting: bold terms (e.g. *Salicylic Acid*), clean list points, and helpful emoji.
+- Answer in simple Hinglish (a mix of Hindi and English written in Latin script, like standard WhatsApp chat) so it feels natural to an Indian patient.
+- Provide practical clinical advice but put a short disclaimer at the end asking them to consult a real dermatologist before starting self-treatment.`;
+
+      // Format history + prompt for the generateContent call
+      const formattedContents: any[] = [];
+      
+      // Inject system instructions as the model setup or prompt prefix
+      const currentPromptText = `${systemInstruction}\n\nPatient says: "${message}"`;
+      
+      const response = await gemini.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: currentPromptText,
+        config: {
+          temperature: 0.7,
+          maxOutputTokens: 1024,
+        }
+      });
+
+      replyText = response.text || "";
+    } catch (apiError: any) {
+      const errStr = JSON.stringify(apiError) || apiError?.message || "";
+      const isUnauthenticated = errStr.includes("UNAUTHENTICATED") || errStr.includes("401") || errStr.includes("invalid authentication") || errStr.includes("ACCESS_TOKEN_TYPE_UNSUPPORTED");
+      
+      if (isUnauthenticated) {
+        console.warn("💡 INFO [GlowAI WhatsApp Chat]: Instantiating Interactive Hinglish Fallback because the active GEMINI_API_KEY is unauthenticated, expired, or invalid. Please configure a valid GEMINI_API_KEY in the Secrets panel of Google AI Studio to unlock live generative chat.");
+      } else {
+        console.warn("WhatsApp Gemini AI chat failed, activating custom chatbot clinical fallback:", apiError?.message || apiError);
+      }
+      
+      const normalizedMsg = message.toLowerCase();
+      // Match clinical topic keywords for a smart response
+      if (normalizedMsg.includes("acne") || normalizedMsg.includes("breakout") || normalizedMsg.includes("pimple") || normalizedMsg.includes("daag")) {
+        replyText = `*Hey ${session.name}! GlowAI WhatsApp Bot here* 🧪\n\nAcne and breakouts control karne ke liye ye steps follow karein:\n\n1. *Clarity Face Wash:* Din me do baar Salicylic Acid (BHA 2%) cleanser use karein.\n2. *Active treatment:* Raat ko *Niacinamide (10%)* serum lgayein sebum regulate karne ke liye.\n3. *Keep Hydrated:* Ek lightweight oil-free gel moisturizer use karein.\n\n*Tips:* Chehre ko touch naa karein aur active pimples ko pop mat karein! \n\n_Note: Yeh ek AI simulation guidance hai, serious conditions ke liye skin specialist se milein._`;
+      } else if (normalizedMsg.includes("dry") || normalizedMsg.includes("dryness") || normalizedMsg.includes("skin tight") || normalizedMsg.includes("skin patadi")) {
+        replyText = `*Hey ${session.name}! GlowAI WhatsApp Bot here* 💧\n\nSkin dryness and flakiness biological barriers restore karne ke liye ye karein:\n\n1. *Gentle Cleansing:* Soap-free, mild creamy cleanser use karein.\n2. *Humidify:* Damp face par *Hyaluronic Acid* serum lgayein moisture lock karne ke liye.\n3. *Ceramide Shield:* Ek oily ya rich barrier repair cream (Ceramides or squalane) apply karein jo moisture recover kare.\n\n_Note: Yeh ek AI advisory hai, active flare-ups ke liye expert guidance lein._`;
+      } else if (normalizedMsg.includes("spot") || normalizedMsg.includes("pigment") || normalizedMsg.includes("sun") || normalizedMsg.includes("dull")) {
+        replyText = `*Hey ${session.name}! GlowAI WhatsApp Bot here* ☀️\n\nDark spots and pigmentation face se fade karne ke liye simple rule:\n\n1. *Sun Protection (SURE CHECK!):* Daily *SPF 50 PA++++* sunscreen zaroor lgayein.\n2. *Brightening active:* Vitamin C ya Alpha Arbutin serum morning me apply karein.\n3. *Repair:* Raat ko Glycolic Acid (AHA) ya Retinol lagayein cell cycle turnover badhane ke liye.\n\n_Note: Purane spots ko jane me 4-6 weeks lagte hain. Patience is key!_`;
+      } else {
+        replyText = `*Hello ${session.name}! GlowAI WhatsApp Assistant (+91 62011 86100) me aapka swagat hai* 🌿\n\nAapki skin health humare liye priority hai!\n\nAap mujhe skin concerns se related kuch bhi pooch sakte hain, jaise:\n- \*Pimples ya acne breakouts ka solution\*\n- \*Dry skin aur flakiness kaise theek karein\*\n- \*Sun spots, dark circles aur tanning treatment\*\n- \*Anti-aging aur collagen care secrets\*\n\n_Note: GlowAI skin scanner se live photo scan report pane ke liye 'Home Lobby' me jaakar diagnostic run karein!_`;
+      }
+    }
+
+    res.json({ success: true, reply: replyText });
+  } catch (error: any) {
+    console.error("WhatsApp chat error:", error);
+    res.status(500).json({ error: "Failed to process chat response" });
   }
 });
 
