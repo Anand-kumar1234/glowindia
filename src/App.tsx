@@ -23,7 +23,12 @@ import {
   Trash2,
   ChevronDown,
   Bookmark,
-  Info
+  Info,
+  MessageCircle,
+  Send,
+  Share2,
+  Copy,
+  Check
 } from "lucide-react";
 import { UserSession, AnalysisResult } from "./types";
 
@@ -98,13 +103,39 @@ const SKIN_ARTICLES: SkinArticle[] = [
 ];
 
 export default function App() {
-  // Navigation views: 'signin' | 'details' | 'payment' | 'camera' | 'results' | 'journal' | 'admin'
-  const [view, setView] = useState<"signin" | "details" | "payment" | "camera" | "results" | "journal" | "admin">("signin");
+  // Navigation views: 'signin' | 'details' | 'payment' | 'camera' | 'results' | 'journal' | 'admin' | 'whatsapp'
+  const [view, setView] = useState<"signin" | "details" | "payment" | "camera" | "results" | "journal" | "admin" | "whatsapp">("signin");
   const [user, setUser] = useState<UserSession | null>(null);
   const [sessionId, setSessionId] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string>("");
   const [statusMsg, setStatusMsg] = useState<string>("");
+
+  // WhatsApp bot visual playground states
+  interface WhatsAppMessage {
+    id: string;
+    sender: "user" | "bot" | "system";
+    text: string;
+    time: string;
+  }
+  const [whatsappMessages, setWhatsappMessages] = useState<WhatsAppMessage[]>([
+    {
+      id: "init_sys",
+      sender: "system",
+      text: "🔒 End-to-end encrypted simulated chat with GlowAI Dr. Bot (+91 62011 86100).",
+      time: "Just now"
+    },
+    {
+      id: "init_bot",
+      sender: "bot",
+      text: "*Namaste!* Main hu aapka GlowAI WhatsApp Assistant 🧪\n\nAap mujhse skin patterns, dry skin remedies, or products ke bare me koi bhi question bejhijhak poochh sakte hain.\n\nE.g.:\n- \"Face par dry skin ho rhi h keya lagau?\"\n- \"Mujhe boht zyada active acne or pimples hain\"\n- \"Best ingredients for dark spots reduction\"",
+      time: "Just now"
+    }
+  ]);
+  const [whatsappInput, setWhatsappInput] = useState<string>("");
+  const [whatsappLoading, setWhatsappLoading] = useState<boolean>(false);
+  const [showShareModal, setShowShareModal] = useState<boolean>(false);
+  const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
   // Admin Ledger and registrations state variables
   const [adminUsers, setAdminUsers] = useState<any[]>([]);
@@ -124,6 +155,8 @@ export default function App() {
   const [registerName, setRegisterName] = useState<string>("");
   const [isSigningUp, setIsSigningUp] = useState<boolean>(false);
   const [activeSkinFact, setActiveSkinFact] = useState<string>("general");
+  const [uploadedPicture, setUploadedPicture] = useState<string>("");
+  const [uploadedPictureName, setUploadedPictureName] = useState<string>("");
 
   // Payment delay and polling states (2-minute auto-approval or manual admin override)
   const [paymentDelayActive, setPaymentDelayActive] = useState<boolean>(false);
@@ -142,6 +175,7 @@ export default function App() {
 
   // Analysis result
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [selectedScanImageModal, setSelectedScanImageModal] = useState<string | null>(null);
 
   // Skincare Observation Journal & Face Blog state definition
   interface JournalBlog {
@@ -256,11 +290,144 @@ export default function App() {
       });
   };
 
+  const handleCopyLink = () => {
+    const shareUrl = window.location.origin || "https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app";
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(shareUrl).then(() => {
+        setCopiedLink(true);
+        setTimeout(() => setCopiedLink(false), 2000);
+      }).catch(err => {
+        fallbackCopyText(shareUrl);
+      });
+    } else {
+      fallbackCopyText(shareUrl);
+    }
+  };
+
+  const fallbackCopyText = (text: string) => {
+    try {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      // Position out of sight
+      textArea.style.position = "fixed";
+      textArea.style.top = "0";
+      textArea.style.left = "0";
+      textArea.style.width = "2em";
+      textArea.style.height = "2em";
+      textArea.style.padding = "0";
+      textArea.style.border = "none";
+      textArea.style.outline = "none";
+      textArea.style.boxShadow = "none";
+      textArea.style.background = "transparent";
+      document.body.appendChild(textArea);
+      textArea.select();
+      
+      const successful = document.execCommand("copy");
+      if (successful) {
+        setCopiedLink(true);
+        setTimeout(() => setCopiedLink(false), 2000);
+      } else {
+        console.warn("execCommand copy returned false");
+      }
+      document.body.removeChild(textArea);
+    } catch (e) {
+      console.error("Fallback copy failed", e);
+    }
+  };
+
+  const handleNativeShare = () => {
+    const shareUrl = window.location.origin || "https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app";
+    if (navigator.share) {
+      navigator.share({
+        title: "GlowAI - AI Skincare Scanner",
+        text: "Check out GlowAI! A high-tech AI Skincare analysis scanner for instant dermatologist guides and personalized chemical routines.",
+        url: shareUrl,
+      }).catch(err => {
+        console.warn("Error sharing via native shell, falling back to copy", err);
+        handleCopyLink();
+      });
+    } else {
+      handleCopyLink();
+    }
+  };
+
   const handleDeleteBlog = (blogId: string) => {
     const email = user?.email || "guest";
     const updated = blogs.filter((b) => b.id !== blogId);
     setBlogs(updated);
     localStorage.setItem(`glowai_blogs_${email}`, JSON.stringify(updated));
+  };
+
+  const handleSendWhatsAppChat = () => {
+    if (!whatsappInput.trim() || whatsappLoading || !sessionId) return;
+    const userMsg = whatsappInput.trim();
+    setWhatsappInput("");
+
+    // Add user message to state
+    const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const userMessageObj: WhatsAppMessage = {
+      id: Math.random().toString(),
+      sender: "user",
+      text: userMsg,
+      time: now
+    };
+    const updatedMessages = [...whatsappMessages, userMessageObj];
+    setWhatsappMessages(updatedMessages);
+    setWhatsappLoading(true);
+
+    // Call server API
+    fetch("/api/whatsapp/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        message: userMsg,
+        history: updatedMessages
+          .filter((m) => m.sender !== "system")
+          .map((m) => ({
+            role: m.sender === "user" ? "user" : "model",
+            text: m.text
+          }))
+      })
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        setWhatsappLoading(false);
+        if (data.reply) {
+          setWhatsappMessages((prev) => [
+            ...prev,
+            {
+              id: Math.random().toString(),
+              sender: "bot",
+              text: data.reply,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }
+          ]);
+        } else if (data.error) {
+          setWhatsappMessages((prev) => [
+            ...prev,
+            {
+              id: Math.random().toString(),
+              sender: "system",
+              text: `⚠️ Chat Error: ${data.error}`,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            }
+          ]);
+        }
+      })
+      .catch((err) => {
+        setWhatsappLoading(false);
+        setWhatsappMessages((prev) => [
+          ...prev,
+          {
+            id: Math.random().toString(),
+            sender: "system",
+            text: "⚠️ Network Error. Failed to connect with GlowAI Dr. Bot server.",
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }
+        ]);
+        console.error("WhatsApp chat client dispatch error:", err);
+      });
   };
 
   // Auto load active session from server if saved
@@ -284,7 +451,7 @@ export default function App() {
             if (data.user.email === "gulshankumar9934293812@gmail.com") {
               setView("admin");
               fetchAdminRecords(savedSess);
-            } else if (data.user.paymentVerified) {
+            } else if (data.user.paymentVerified || (data.user.scansRemaining ?? 0) > 0) {
               setView("camera");
             } else {
               // Probe server status to check if a pending delay queue was alive under this session
@@ -372,6 +539,20 @@ export default function App() {
     };
   }, [paymentDelayActive, sessionId]);
 
+  // Polling hook for administrator to automatically sync register and pending queues in real-time
+  useEffect(() => {
+    let adminPollerId: any = null;
+    if (view === "admin" && sessionId) {
+      // Poll server status every 6 seconds to show registration ledger dynamics list
+      adminPollerId = setInterval(() => {
+        fetchAdminRecords(sessionId);
+      }, 6000);
+    }
+    return () => {
+      if (adminPollerId) clearInterval(adminPollerId);
+    };
+  }, [view, sessionId]);
+
   // Manual simulator: Bypasses queue instantly to simulate active admin intervention
   const handleAdminSimulateApproval = () => {
     if (!sessionId) return;
@@ -434,7 +615,7 @@ export default function App() {
           if (data.user.email === "gulshankumar9934293812@gmail.com") {
             setView("admin");
             fetchAdminRecords(data.sessionId);
-          } else if (data.user.paymentVerified) {
+          } else if (data.user.paymentVerified || (data.user.scansRemaining ?? 0) > 0) {
             startCameraStream();
             setView("camera");
           } else {
@@ -450,6 +631,25 @@ export default function App() {
       });
   };
 
+  // Handle Photo Upload Conversion
+  const handlePhotoFileChange = (e: any) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 8 * 1024 * 1024) {
+        setErrorMsg("Photo size is too large. Please select an image under 8MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        if (typeof reader.result === "string") {
+          setUploadedPicture(reader.result);
+          setUploadedPictureName(file.name);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
   // Handle Email Registration
   const handleEmailSignUp = (e: FormEvent) => {
     e.preventDefault();
@@ -463,7 +663,12 @@ export default function App() {
     fetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: emailInput, password: passwordInput, name: registerName }),
+      body: JSON.stringify({ 
+        email: emailInput, 
+        password: passwordInput, 
+        name: registerName, 
+        picture: uploadedPicture || undefined 
+      }),
     })
       .then((res) => res.json())
       .then((data) => {
@@ -513,7 +718,7 @@ export default function App() {
           if (data.user.email === "gulshankumar9934293812@gmail.com") {
             setView("admin");
             fetchAdminRecords(data.sessionId);
-          } else if (data.user.paymentVerified) {
+          } else if (data.user.paymentVerified || (data.user.scansRemaining ?? 0) > 0) {
             startCameraStream();
             setView("camera");
           } else {
@@ -547,6 +752,7 @@ export default function App() {
         name: fullName,
         age: uage,
         concern,
+        picture: uploadedPicture || undefined,
       }),
     })
       .then((res) => res.json())
@@ -554,8 +760,8 @@ export default function App() {
         setLoading(false);
         if (data.success) {
           setUser(data.user);
-          // If already paid, go straight to camera, else to payment
-          if (data.user.paymentVerified) {
+          // If already paid or has free scans remaining, go straight to camera, else to payment
+          if (data.user.paymentVerified || (data.user.scansRemaining ?? 0) > 0) {
             startCameraStream();
             setView("camera");
           } else {
@@ -632,6 +838,13 @@ export default function App() {
     setCameraError("");
     setScanningStatus("Initializing professional high-res capture lens...");
     
+    // Safety guard for sandboxed iframes or insecure preview origins missing host mediaDevices mapping
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError("Camera capture APIs are not supported on this device/browser setup, or are blocked by the iframe constraints. GlowAI needs secure origin (HTTPS/localhost) and iframe permission flags to stream real-time face snapshots.");
+      setScanningStatus("GlowAI engine suspended.");
+      return;
+    }
+
     // Explicit camera access triggers
     navigator.mediaDevices.getUserMedia({ 
       video: { 
@@ -910,7 +1123,7 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (user.paymentVerified) {
+                    if (user.paymentVerified || (user.scansRemaining ?? 0) > 0) {
                       startCameraStream();
                       setView("camera");
                     } else {
@@ -927,9 +1140,11 @@ export default function App() {
                     <Camera className="w-4 h-4 shrink-0" />
                     <span>3D Face AI Scanner</span>
                   </div>
-                  {!user.paymentVerified && (
+                  {!(user.paymentVerified || (user.scansRemaining ?? 0) > 0) ? (
                     <span className="text-[8px] bg-amber-105 text-amber-800 font-extrabold px-1.5 py-0.5 rounded-md uppercase tracking-wider scale-90 shrink-0">🔐 Pay ₹15</span>
-                  )}
+                  ) : (user.scansRemaining ?? 0) > 0 && !user.paymentVerified ? (
+                    <span className="text-[8px] bg-teal-50 text-teal-850 font-extrabold px-1.5 py-0.5 rounded-md uppercase tracking-wider scale-90 shrink-0">🎁 Free ({user.scansRemaining})</span>
+                  ) : null}
                 </button>
 
                 <button
@@ -976,6 +1191,28 @@ export default function App() {
                   </div>
                   <span className="text-[9px] bg-teal-50 text-teal-700 font-extrabold px-1.5 py-0.5 rounded-md font-mono shrink-0">{blogs.length}</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopCameraStream();
+                    setView("whatsapp");
+                  }}
+                  className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+                    view === "whatsapp"
+                      ? "bg-slate-900 text-white shadow-md shadow-slate-950/10"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <MessageCircle className="w-4 h-4 shrink-0 text-emerald-500" />
+                    <span>WhatsApp doctor Bot</span>
+                  </div>
+                  <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                </button>
               </div>
 
               <div className="space-y-2">
@@ -1004,11 +1241,15 @@ export default function App() {
                       <span className="text-slate-450 uppercase tracking-wider text-[9px] font-extrabold">Billing Status:</span>
                       {user.paymentVerified ? (
                         <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 font-extrabold px-2 py-0.5 rounded-full text-[9px] border border-emerald-100">
-                          <CheckCircle className="w-2.5 h-2.5" /> Active
+                          <CheckCircle className="w-2.5 h-2.5" /> Paid Active
+                        </span>
+                      ) : (user.scansRemaining ?? 0) > 0 ? (
+                        <span className="inline-flex items-center gap-1 bg-teal-50 text-teal-700 font-extrabold px-2 py-0.5 rounded-full text-[9px] border border-teal-100">
+                          🎁 Free Trial ({user.scansRemaining} scans)
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-700 font-extrabold px-2 py-0.5 rounded-full text-[9px] border border-amber-100">
-                          Pending (₹15)
+                          Trial Expired (Pay ₹15)
                         </span>
                       )}
                     </div>
@@ -1076,6 +1317,15 @@ export default function App() {
               </div>
 
               <div className="flex gap-2.5 items-center">
+                <button
+                  type="button"
+                  onClick={() => setShowShareModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-250/60 rounded-lg text-xs font-bold transition cursor-pointer"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                  <span>Share App</span>
+                </button>
+
                 {view === "results" && (
                   <button 
                     onClick={handlePrintReport}
@@ -1127,7 +1377,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => {
-                  if (user.paymentVerified) {
+                  if (user.paymentVerified || (user.scansRemaining ?? 0) > 0) {
                     startCameraStream();
                     setView("camera");
                   } else {
@@ -1172,6 +1422,32 @@ export default function App() {
                 <BookOpen className="w-4 h-4 text-slate-455" />
                 <span className="text-[10px] tracking-tight font-sans font-bold">Face Blog</span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  stopCameraStream();
+                  setView("whatsapp");
+                }}
+                className={`flex flex-col items-center gap-1.5 px-3 py-1 bg-transparent border-0 outline-none transition cursor-pointer ${
+                  view === "whatsapp" ? "text-teal-600 font-extrabold scale-105" : "text-slate-550 hover:text-slate-855"
+                }`}
+              >
+                <div className="relative">
+                  <MessageCircle className="w-4 h-4 text-emerald-500" />
+                  <span className="absolute -top-1 -right-1 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-ping"></span>
+                </div>
+                <span className="text-[10px] tracking-tight font-sans font-bold text-slate-600">Dr. Bot</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowShareModal(true)}
+                className="flex flex-col items-center gap-1.5 px-3 py-1 bg-transparent/0 border-0 outline-none transition cursor-pointer text-slate-550 hover:text-slate-855"
+              >
+                <Share2 className="w-4 h-4 text-emerald-600 animate-pulse" />
+                <span className="text-[10px] tracking-tight font-sans font-bold text-emerald-700">Share</span>
+              </button>
             </nav>
           )}
 
@@ -1215,10 +1491,20 @@ export default function App() {
                         <div className="w-12 h-12 bg-teal-50 rounded-2xl flex items-center justify-center shadow-xs">
                           <Sparkles className="w-6 h-6 text-teal-600" />
                         </div>
-                        <div>
-                          <span className="bg-teal-50 text-teal-850 text-[10px] uppercase tracking-[0.2em] font-extrabold px-3 py-1 rounded-full border border-teal-100">
-                            Clinical AI Diagnostics
-                          </span>
+                         <div className="flex-1">
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <span className="bg-teal-50 text-teal-850 text-[10px] uppercase tracking-[0.2em] font-extrabold px-3 py-1 rounded-full border border-teal-100">
+                              Clinical AI Diagnostics
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowShareModal(true)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 hover:border-emerald-300 border border-emerald-200 rounded-full text-[10px] font-black tracking-wider uppercase transition cursor-pointer outline-none shrink-0"
+                            >
+                              <Share2 className="w-3 h-3" />
+                              <span>Share web</span>
+                            </button>
+                          </div>
                           <h2 className="text-2xl font-black text-slate-850 tracking-tight mt-1 leading-tight">
                             Glow<span className="text-teal-600">AI</span> Skin Engine & Portal
                           </h2>
@@ -1328,72 +1614,128 @@ export default function App() {
 
                   {/* RIGHT COLUMN: PREMIUM DUAL SIGN-IN FORM */}
                   <div className="lg:col-span-5 flex flex-col justify-center">
-                    <div className="border border-slate-150 bg-slate-50/50 rounded-2xl p-6 md:p-8 space-y-6 text-left">
+                    <div className="border border-slate-200 bg-white rounded-3xl p-6 md:p-10 space-y-8 text-left shadow-lg shadow-slate-100">
                       
-                      {/* Ordinary email forms */}
+                      {/* Form Header */}
                       <div>
                         <div className="flex justify-between items-center mb-3">
-                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                            {isSigningUp ? "Create Profile" : "Credentials Log In"}
-                          </span>
+                          <h2 className="text-xl md:text-2xl font-black text-slate-900 tracking-tight">
+                            {isSigningUp ? "Create Profile" : "Secure Log In"}
+                          </h2>
                           <button 
                             type="button"
                             onClick={() => {
                               setIsSigningUp(!isSigningUp);
                               setErrorMsg("");
                             }}
-                            className="text-[11px] font-extrabold text-teal-600 hover:text-teal-700 underline focus:outline-none cursor-pointer"
+                            className="text-xs font-black text-teal-600 hover:text-teal-700 underline focus:outline-none cursor-pointer"
                           >
-                            {isSigningUp ? "Already Registered? Login" : "New Account?"}
+                            {isSigningUp ? "Have an account? Login" : "New Account?"}
                           </button>
                         </div>
+                        <p className="text-slate-450 text-xs md:text-sm">
+                          {isSigningUp 
+                            ? "Register your clinical patient dossier details to initiate advanced epidermal vision assessments." 
+                            : "Enter your registered credentials to access your dynamic clinical reports."
+                          }
+                        </p>
+                      </div>
 
-                        <form onSubmit={isSigningUp ? handleEmailSignUp : handleEmailLogin} className="space-y-4">
+                      {/* Ordinary email forms */}
+                      <div>
+                        <form onSubmit={isSigningUp ? handleEmailSignUp : handleEmailLogin} className="space-y-5">
                           {isSigningUp && (
-                            <div className="relative">
-                              <input 
-                                type="text"
-                                placeholder="Patient Full Name"
-                                required
-                                value={registerName}
-                                onChange={(e) => setRegisterName(e.target.value)}
-                                className="block w-full p-3.5 pl-10.5 bg-white border border-slate-200 focus:border-teal-450 rounded-xl transition outline-none text-xs font-semibold text-slate-800 placeholder-slate-400"
-                              />
-                              <User className="absolute left-3.5 top-4 w-4 h-4 text-slate-400" />
+                            <div className="space-y-1.5">
+                              <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-widest">
+                                Patient Full Name
+                              </label>
+                              <div className="relative">
+                                <input 
+                                  type="text"
+                                  placeholder="e.g. Rahul Kumar"
+                                  required
+                                  value={registerName}
+                                  onChange={(e) => setRegisterName(e.target.value)}
+                                  className="block w-full p-4 pl-12 bg-slate-50 border border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 rounded-2xl transition-all outline-none text-sm md:text-base font-bold text-slate-850 placeholder-slate-400"
+                                />
+                                <User className="absolute left-4 top-[18px] w-4.5 h-4.5 text-slate-400" />
+                              </div>
                             </div>
                           )}
 
-                          <div className="relative">
-                            <input 
-                              type="email"
-                              placeholder="e.g. name@example.com"
-                              required
-                              value={emailInput}
-                              onChange={(e) => setEmailInput(e.target.value)}
-                              className="block w-full p-3.5 pl-10.5 bg-white border border-slate-200 focus:border-teal-450 rounded-xl transition outline-none text-xs font-semibold text-slate-800 placeholder-slate-400"
-                            />
-                            <Bookmark className="absolute left-3.5 top-4 w-4 h-4 text-slate-400" />
+                          <div className="space-y-1.5">
+                            <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-widest">
+                              Email Address
+                            </label>
+                            <div className="relative">
+                              <input 
+                                type="email"
+                                placeholder="e.g. name@example.com"
+                                required
+                                value={emailInput}
+                                onChange={(e) => setEmailInput(e.target.value)}
+                                className="block w-full p-4 pl-12 bg-slate-50 border border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 rounded-2xl transition-all outline-none text-sm md:text-base font-bold text-slate-850 placeholder-slate-400"
+                              />
+                              <Bookmark className="absolute left-4 top-[18px] w-4.5 h-4.5 text-slate-400" />
+                            </div>
                           </div>
 
-                          <div className="relative">
-                            <input 
-                              type="password"
-                              placeholder="••••••••"
-                              required
-                              value={passwordInput}
-                              onChange={(e) => setPasswordInput(e.target.value)}
-                              className="block w-full p-3.5 pl-10.5 bg-white border border-slate-200 focus:border-teal-450 rounded-xl transition outline-none text-xs font-semibold text-slate-800 placeholder-slate-400"
-                            />
-                            <Info className="absolute left-3.5 top-4 w-4 h-4 text-slate-400" />
+                          <div className="space-y-1.5">
+                            <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-widest">
+                              Security Password
+                            </label>
+                            <div className="relative">
+                              <input 
+                                type="password"
+                                placeholder="••••••••"
+                                required
+                                value={passwordInput}
+                                onChange={(e) => setPasswordInput(e.target.value)}
+                                className="block w-full p-4 pl-12 bg-slate-50 border border-slate-200 focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 rounded-2xl transition-all outline-none text-sm md:text-base font-bold text-slate-855 placeholder-slate-400"
+                              />
+                              <Info className="absolute left-4 top-[18px] w-4.5 h-4.5 text-slate-400" />
+                            </div>
                           </div>
+
+                          {/* Profile Photo Upload Field (Shown on Signup) */}
+                          {isSigningUp && (
+                            <div className="space-y-2">
+                              <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-widest">
+                                Profile Photo (Upload optional)
+                              </label>
+                              <div className="flex items-center gap-4 bg-slate-50 p-4 border border-slate-200 rounded-2xl">
+                                <div className="w-14 h-14 rounded-full bg-white border-2 border-dashed border-slate-300 flex items-center justify-center overflow-hidden shrink-0">
+                                  {uploadedPicture ? (
+                                    <img src={uploadedPicture} alt="Profile Preview" className="w-full h-full object-cover" />
+                                  ) : (
+                                    <Camera className="w-6 h-6 text-slate-450" />
+                                  )}
+                                </div>
+                                <div className="flex-1 text-left">
+                                  <label className="inline-block bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-black px-4 py-2 rounded-xl cursor-pointer shadow-xs uppercase tracking-wider transition">
+                                    Choose Photo
+                                    <input 
+                                      type="file" 
+                                      accept="image/*" 
+                                      onChange={handlePhotoFileChange} 
+                                      className="hidden" 
+                                    />
+                                  </label>
+                                  <p className="text-[11px] text-slate-450 mt-1 truncate max-w-[180px]">
+                                    {uploadedPictureName ? uploadedPictureName : "Upload skin photo / selfie"}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
 
                           <button 
                             type="submit"
                             disabled={loading}
-                            className="w-full bg-slate-900 border border-slate-900 hover:bg-slate-800 text-white font-extrabold py-3.5 rounded-xl text-xs uppercase tracking-wider transition-all transform active:scale-[0.99] flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+                            className="w-full bg-slate-900 border border-slate-900 hover:bg-slate-800 text-white font-extrabold py-4 rounded-2xl text-sm uppercase tracking-wider transition-all transform active:scale-[0.99] flex items-center justify-center gap-2.5 cursor-pointer shadow-md hover:shadow-lg hover:shadow-slate-900/10"
                           >
                             {loading ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                              <Loader2 className="w-4 h-4 animate-spin text-white" />
                             ) : isSigningUp ? (
                               <span>Register & Start Analysis</span>
                             ) : (
@@ -1403,13 +1745,13 @@ export default function App() {
                         </form>
 
                         {/* Hinglish Information Card - explaining what the app does */}
-                        <div id="hinglish-info-card" className="mt-4 p-4.5 bg-gradient-to-r from-teal-50/50 to-emerald-50/50 border border-teal-150/80 rounded-2xl text-left shadow-xs">
+                        <div id="hinglish-info-card" className="mt-6 p-5 bg-gradient-to-r from-teal-50/60 to-emerald-50/60 border border-teal-150/80 rounded-2xl text-left shadow-xs">
                           <span className="text-[10px] uppercase font-black tracking-widest text-teal-800 bg-teal-150/50 px-2.5 py-1 rounded-md inline-block mb-2">🔥 Yeh App Kya Karta Hai?</span>
                           <p className="text-xs text-slate-700 leading-relaxed font-semibold">
                             <strong>GlowAI Skin Scanner</strong> aapke chehre ka <strong>live scan</strong> karke aapka exact <strong>Skin Type (Dry, Oily ya Sensitive)</strong> batata hai, aur pores ya breakouts ke hisab se <strong>perfect dynamic morning aur night routine</strong> tyar karta hai!
                           </p>
                           <p className="text-[10px] text-slate-550 leading-relaxed mt-2.5 border-t border-teal-100/60 pt-2.5">
-                            👉 Agar aap naye user hain, toh <strong>Register</strong> karke turant scan karein. Agar already registered hain, toh password enter karke login karein.
+                            👉 Agar aap naye user hain, toh <strong>Register</strong> karke profile photo upload karein aur scan karein. Agar already registered hain, toh login karein.
                           </p>
                         </div>
                       </div>
@@ -1497,6 +1839,38 @@ export default function App() {
                       </div>
                     </div>
                     <p className="text-[10px] text-slate-400 mt-2">Selecting a matching concern alters how Gemini assigns routine active ingredients.</p>
+                  </div>
+
+                  {/* Profile Photo Upload inside Complete Skincare Dossier */}
+                  <div className="space-y-2.5">
+                    <label className="block text-xs font-extrabold text-slate-700 uppercase tracking-widest">
+                      Update Profile Photo (Optional)
+                    </label>
+                    <div className="flex items-center gap-5 bg-slate-50 p-4 border border-slate-200 rounded-2xl">
+                      <div className="w-16 h-16 rounded-full bg-white border-2 border-dashed border-slate-300 flex items-center justify-center overflow-hidden shrink-0 shadow-xs">
+                        {uploadedPicture ? (
+                          <img src={uploadedPicture} alt="Profile Preview" className="w-full h-full object-cover" />
+                        ) : user?.picture ? (
+                          <img src={user.picture} alt="Current Profile" className="w-full h-full object-cover" />
+                        ) : (
+                          <Camera className="w-7 h-7 text-slate-400" />
+                        )}
+                      </div>
+                      <div className="flex-1 text-left">
+                        <label className="inline-block bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-black px-4 py-2.5 rounded-xl cursor-pointer shadow-xs uppercase tracking-wider transition">
+                          Upload New Photo
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            onChange={handlePhotoFileChange} 
+                            className="hidden" 
+                          />
+                        </label>
+                        <p className="text-xs text-slate-450 mt-1.5 truncate max-w-[240px]">
+                          {uploadedPictureName ? uploadedPictureName : "Choose a skin snapshot or selfie file"}
+                        </p>
+                      </div>
+                    </div>
                   </div>
 
                   <div className="pt-4">
@@ -1910,12 +2284,12 @@ export default function App() {
                   </div>
                   <button 
                     onClick={() => {
-                      if (user && user.paymentVerified && (user.scansRemaining ?? 0) > 0) {
+                      if (user && (user.paymentVerified || (user.scansRemaining ?? 0) > 0)) {
                         startCameraStream();
                         setView("camera");
                       } else {
                         // Scan tokens are used up! Force renewal to pay price again
-                        setStatusMsg("Your 2-scan package has expired. Redirecting to payment check...");
+                        setStatusMsg("Your 5-scan trial package has expired. Redirecting to payment check...");
                         setTimeout(() => {
                           setStatusMsg("");
                           setView("payment");
@@ -2270,298 +2644,590 @@ export default function App() {
 
             {/* VIEW 7: ADMINISTRATOR DASHBOARD LEDGER & OVERRIDES */}
             {view === "admin" && (
-              <div id="view-admin" className="w-full space-y-8 animate-fadeIn text-slate-850">
-                
-                {/* 1. Header Overview Metrics */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                  <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4.5">
-                    <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold shrink-0">
-                      <User className="w-6 h-6" />
-                    </div>
-                    <div className="text-left">
-                      <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Total Patients</span>
-                      <strong className="text-2xl font-black text-slate-900 leading-none">{adminUsers.length}</strong>
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4.5">
-                    <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold animate-pulse shrink-0">
-                      <DollarSign className="w-6 h-6 animate-bounce" />
-                    </div>
-                    <div className="text-left">
-                      <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Pending Approvals</span>
-                      <strong className="text-2xl font-black text-amber-600 leading-none">{adminPending.length}</strong>
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4.5">
-                    <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shrink-0">
-                      <CheckCircle className="w-6 h-6" />
-                    </div>
-                    <div className="text-left">
-                      <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Verified Access</span>
-                      <strong className="text-2xl font-black text-slate-900 leading-none">
-                        {adminUsers.filter((u) => u.paymentVerified).length}
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4.5">
-                    <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold shrink-0">
-                      <Activity className="w-6 h-6" />
-                    </div>
-                    <div className="text-left">
-                      <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Active System Mode</span>
-                      <strong className="text-xs font-black text-teal-600 leading-none uppercase font-mono tracking-widest mt-0.5 block">LIVE PRODUCTION</strong>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 2. Main Ledger Grid layout */}
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+              user?.email === "gulshankumar9934293812@gmail.com" ? (
+                <div id="view-admin" className="w-full space-y-8 animate-fadeIn text-slate-850">
                   
-                  {/* LEFT COLUMN (COL-SPAN-5): PENDING UTR PAYMENTS WAITING APPROVAL */}
-                  <div className="lg:col-span-5 space-y-4">
-                    <div className="flex justify-between items-center bg-slate-900 text-white rounded-t-2xl px-5 py-4.5 shadow-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 bg-amber-500 rounded-full animate-ping"></span>
-                        <h4 className="text-xs font-black uppercase tracking-widest text-slate-100">
-                          Pending Approvals Ledger ({adminPending.length})
-                        </h4>
+                  {/* 1. Header Overview Metrics */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4.5">
+                      <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold shrink-0">
+                        <User className="w-6 h-6" />
                       </div>
-                      <span className="text-[9px] font-mono tracking-widest uppercase bg-amber-500/20 text-amber-300 px-2 py-1 rounded-[6px] font-bold">
-                        Awaiting Action
-                      </span>
+                      <div className="text-left">
+                        <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Total Patients</span>
+                        <strong className="text-2xl font-black text-slate-900 leading-none">{adminUsers.length}</strong>
+                      </div>
                     </div>
 
-                    <div className="bg-white border-x border-b border-slate-200 rounded-b-2xl p-4.5 space-y-4 max-h-[600px] overflow-y-auto custom-scrollbar shadow-xs">
-                      {adminPending.length === 0 ? (
-                        <div className="py-12 text-center text-slate-400 font-medium">
-                          <CheckCircle className="w-8 h-8 text-slate-200 mx-auto mb-2" />
-                          <p className="text-xs font-extrabold text-slate-700">All payments up to date!</p>
-                          <p className="text-[10px] text-slate-400 mt-1">There are no pending manual UTR approvals.</p>
-                        </div>
-                      ) : (
-                        adminPending.map((p, idx) => (
-                          <div 
-                            key={`${p.email}_pending_${idx}`} 
-                            className="bg-amber-50/50 border border-amber-150 p-4 rounded-xl space-y-3 hover:shadow-xs transition relative"
-                          >
-                            <div className="flex justify-between items-start">
-                              <div className="text-left">
-                                <h5 className="text-xs font-extrabold text-slate-900">{p.name || "Anonymous Patient"}</h5>
-                                <span className="text-[10px] text-slate-450 font-mono block select-all">{p.email}</span>
-                              </div>
-                              <span className="text-[9px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-mono font-bold tracking-tight shrink-0">
-                                Age: {p.age} • {p.concern}
-                              </span>
-                            </div>
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4.5">
+                      <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold animate-pulse shrink-0">
+                        <DollarSign className="w-6 h-6 animate-bounce" />
+                      </div>
+                      <div className="text-left">
+                        <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Pending Approvals</span>
+                        <strong className="text-2xl font-black text-amber-600 leading-none">{adminPending.length}</strong>
+                      </div>
+                    </div>
 
-                            <div className="bg-white px-3 py-2.5 rounded-lg border border-amber-200 text-left">
-                              <span className="text-[9px] font-black uppercase text-amber-600 block tracking-wider">Submitted UTR Payment Code</span>
-                              <strong className="text-xs font-mono font-extrabold text-slate-800 tracking-wider block select-all bg-amber-50/20 px-1 py-0.5 mt-0.5 border border-dashed border-amber-300/50 rounded">
-                                {p.utr || "NO UTR PROVIDED"}
-                              </strong>
-                              {p.submittedAt && (
-                                <span className="text-[9px] text-slate-450 block mt-1.5 font-mono">
-                                  Logged: {p.submittedAt}
-                                </span>
-                              )}
-                            </div>
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4.5">
+                      <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shrink-0">
+                        <CheckCircle className="w-6 h-6" />
+                      </div>
+                      <div className="text-left">
+                        <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Verified Access</span>
+                        <strong className="text-2xl font-black text-slate-900 leading-none">
+                          {adminUsers.filter((u) => u && u.paymentVerified).length}
+                        </strong>
+                      </div>
+                    </div>
 
-                            <div className="grid grid-cols-2 gap-2.5 pt-1">
-                              <button
-                                type="button"
-                                onClick={() => handleAdminLedgerAction(p.email, "approve")}
-                                className="py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1 shadow-xs border-0"
-                              >
-                                <CheckCircle className="w-3.5 h-3.5" /> Approve Code
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleAdminLedgerAction(p.email, "reject")}
-                                className="py-2 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 rounded-lg text-[10px] font-bold tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1 shadow-xs border-0"
-                              >
-                                Reject / Clear
-                              </button>
-                            </div>
-                          </div>
-                        ))
-                      )}
+                    <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-xs flex items-center gap-4.5">
+                      <div className="w-12 h-12 rounded-2xl bg-teal-50 text-teal-600 flex items-center justify-center font-bold shrink-0">
+                        <Activity className="w-6 h-6" />
+                      </div>
+                      <div className="text-left">
+                        <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Active System Mode</span>
+                        <strong className="text-xs font-black text-teal-600 leading-none uppercase font-mono tracking-widest mt-0.5 block">LIVE PRODUCTION</strong>
+                      </div>
                     </div>
                   </div>
 
-                  {/* RIGHT COLUMN (COL-SPAN-7): PATIENTS SYSTEM DIRECTORY */}
-                  <div className="lg:col-span-7 space-y-4">
+                  {/* 2. Main Ledger Grid layout */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                     
-                    {/* Filter and Search Controls Block */}
-                    <div className="bg-white border border-slate-205 p-4 rounded-2xl flex flex-col sm:flex-row gap-4 items-center justify-between shadow-xs">
-                      
-                      <div className="relative w-full sm:max-w-xs">
-                        <input 
-                          type="text"
-                          placeholder="Search patient record by name, email, concern, or UTR..."
-                          value={adminSearch}
-                          onChange={(e) => setAdminSearch(e.target.value)}
-                          className="w-full text-xs p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-teal-450 focus:bg-white transition outline-none font-semibold text-slate-850"
-                        />
-                        <Search className="absolute left-3 top-3 w-4 h-4 text-slate-450" />
-                      </div>
-
-                      <div className="flex gap-2.5 w-full sm:w-auto shrink-0 justify-end">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAdminSearch("");
-                            fetchAdminRecords(sessionId);
-                          }}
-                          className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border-0 outline-none"
-                          title="Refresh server record database"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Pull Database</span>
-                        </button>
-                      </div>
-
-                    </div>
-
-                    {/* Patient Ledger table list */}
-                    <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
-                      <div className="bg-slate-100 text-slate-705 px-5 py-3.5 border-b border-slate-200 flex items-center justify-between font-bold text-xs uppercase tracking-wider">
-                        <span>Patient Diagnostics Registry List</span>
-                        <span className="text-[10px] font-mono font-extrabold text-slate-455 tracking-tight italic normal-case">
-                          Showing {adminUsers.filter((u) => {
-                            const q = adminSearch.toLowerCase();
-                            return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q) || (u.utr && u.utr.toLowerCase().includes(q));
-                          }).length} of {adminUsers.length} total profiles
+                    {/* LEFT COLUMN (COL-SPAN-5): PENDING UTR PAYMENTS WAITING APPROVAL */}
+                    <div className="lg:col-span-5 space-y-4">
+                      <div className="flex justify-between items-center bg-slate-900 text-white rounded-t-2xl px-5 py-4.5 shadow-xs">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 bg-amber-500 rounded-full animate-ping"></span>
+                          <h4 className="text-xs font-black uppercase tracking-widest text-slate-100">
+                            Pending Approvals Ledger ({adminPending.length})
+                          </h4>
+                        </div>
+                        <span className="text-[9px] font-mono tracking-widest uppercase bg-amber-500/20 text-amber-300 px-2 py-1 rounded-[6px] font-bold">
+                          Awaiting Action
                         </span>
                       </div>
 
-                      <div className="p-2 divide-y divide-slate-100 max-h-[515px] overflow-y-auto custom-scrollbar">
-                        {adminUsers.filter((u) => {
-                          const q = adminSearch.toLowerCase();
-                          return (
-                            u.name.toLowerCase().includes(q) ||
-                            u.email.toLowerCase().includes(q) ||
-                            (u.utr && u.utr.toLowerCase().includes(q)) ||
-                            (u.concern && u.concern.toLowerCase().includes(q))
-                          );
-                        }).length === 0 ? (
-                          <div className="py-16 text-center text-slate-400 font-medium">
-                            <Search className="w-8 h-8 text-slate-200 mx-auto mb-2" />
-                            <p className="text-xs font-bold text-slate-500">No matched profiles found</p>
-                            <p className="text-[10px] text-slate-400 mt-1">Refine your active search query parameter and retry filter bounds.</p>
+                      <div className="bg-white border-x border-b border-slate-200 rounded-b-2xl p-4.5 space-y-4 max-h-[600px] overflow-y-auto custom-scrollbar shadow-xs">
+                        {adminPending.length === 0 ? (
+                          <div className="py-12 text-center text-slate-400 font-medium">
+                            <CheckCircle className="w-8 h-8 text-slate-200 mx-auto mb-2" />
+                            <p className="text-xs font-extrabold text-slate-700">All payments up to date!</p>
+                            <p className="text-[10px] text-slate-400 mt-1">There are no pending manual UTR approvals.</p>
                           </div>
                         ) : (
-                          adminUsers
-                            .filter((u) => {
-                              const q = adminSearch.toLowerCase();
-                              return (
-                                u.name.toLowerCase().includes(q) ||
-                                u.email.toLowerCase().includes(q) ||
-                                (u.utr && u.utr.toLowerCase().includes(q)) ||
-                                (u.concern && u.concern.toLowerCase().includes(q))
-                              );
-                            })
-                            .map((u, idx) => (
+                          adminPending.map((p, idx) => {
+                            if (!p) return null;
+                            return (
                               <div 
-                                key={`${u.email}_directory_${idx}`} 
-                                className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 hover:bg-slate-50 transition duration-150 text-left rounded-xl"
+                                key={`${p.email || idx}_pending_${idx}`} 
+                                className="bg-amber-50/50 border border-amber-150 p-4 rounded-xl space-y-3 hover:shadow-xs transition relative text-left"
                               >
-                                <div className="space-y-1">
-                                  <div className="flex items-center gap-2">
-                                    <h5 className="font-extrabold text-slate-900 text-sm tracking-tight">{u.name || "Anonymous Patient"}</h5>
-                                    
-                                    {u.paymentVerified ? (
-                                      <span className="text-[9px] font-extrabold bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-150 flex items-center gap-1 uppercase tracking-wider">
-                                        <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span> Active Portal User
-                                      </span>
-                                    ) : (
-                                      <span className="text-[9px] font-extrabold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full border border-slate-200 uppercase tracking-wider">
-                                        Unverified
-                                      </span>
-                                    )}
-
-                                    {u.email === "gulshankumar9934293812@gmail.com" && (
-                                      <span className="text-[9px] font-extrabold bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full border border-purple-100 uppercase tracking-wider">
-                                        System Admin
-                                      </span>
-                                    )}
+                                <div className="flex justify-between items-start">
+                                  <div className="text-left">
+                                    <h5 className="text-xs font-extrabold text-slate-900">{p.name || "Anonymous Patient"}</h5>
+                                    <span className="text-[10px] text-slate-450 font-mono block select-all">{p.email}</span>
                                   </div>
-
-                                  <div className="text-[11px] text-slate-500 space-y-0.5">
-                                    <p className="font-mono text-slate-450 select-all">{u.email}</p>
-                                    <p className="font-medium text-slate-600">
-                                      Background Profile: <strong className="text-slate-855">Age {u.age || "N/A"}</strong> — Concern: <strong className="text-slate-855 font-bold">{u.concern || "None Registered"}</strong>
-                                    </p>
-                                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                                      {u.utr && (
-                                        <p className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-650 inline-block">
-                                          Approved UTR: <strong className="text-slate-800 font-extrabold tracking-wider">{u.utr}</strong>
-                                        </p>
-                                      )}
-                                      <span className="text-[10px] uppercase font-black tracking-wider px-2 py-0.5 rounded text-slate-500 bg-slate-100">User Status:</span>
-                                      {u.paymentVerified ? (
-                                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-md border border-emerald-200">
-                                          ✅ Verified - Paisa Mil Gaya (₹15)
-                                        </span>
-                                      ) : u.email === "gulshankumar9934293812@gmail.com" ? (
-                                        <span className="text-[10px] font-bold text-purple-700 bg-purple-50 px-2.5 py-0.5 rounded-md border border-purple-200">
-                                          ⚡ System Owner
-                                        </span>
-                                      ) : (
-                                        <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-md border border-amber-200">
-                                          ⏳ Processing - Fees Pending
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
+                                  <span className="text-[9px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-mono font-bold tracking-tight shrink-0">
+                                    Age: {p.age} • {p.concern}
+                                  </span>
                                 </div>
 
-                                <div className="flex sm:flex-col items-center sm:items-end gap-2 text-right shrink-0">
-                                  <div className="text-[10px] text-slate-400 font-mono tracking-wider">
-                                    Scans Left: <strong className="text-slate-800 font-extrabold text-xs">{u.scansRemaining}</strong>
-                                  </div>
-                                  
-                                  {u.email !== "gulshankumar9934293812@gmail.com" && (
-                                    <div className="flex gap-2">
-                                      {u.paymentVerified ? (
-                                        <button 
-                                          onClick={() => handleAdminLedgerAction(u.email, "reject")}
-                                          className="text-[10px] font-bold text-rose-600 border border-rose-200 hover:bg-rose-50 px-2.5 py-1 rounded-lg transition shrink-0 cursor-pointer"
-                                          title="Revoke active verified access status and require setup again"
-                                        >
-                                          Revoke Verify
-                                        </button>
-                                      ) : (
-                                        <button 
-                                          onClick={() => handleAdminLedgerAction(u.email, "approve")}
-                                          className="text-[10px] font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg transition shrink-0 cursor-pointer border-0"
-                                        >
-                                          Force Verify
-                                        </button>
-                                      )}
-                                    </div>
+                                <div className="bg-white px-3 py-2.5 rounded-lg border border-amber-200 text-left">
+                                  <span className="text-[9px] font-black uppercase text-amber-600 block tracking-wider">Submitted UTR Payment Code</span>
+                                  <strong className="text-xs font-mono font-extrabold text-slate-800 tracking-wider block select-all bg-amber-50/20 px-1 py-0.5 mt-0.5 border border-dashed border-amber-300/50 rounded">
+                                    {p.utr || "NO UTR PROVIDED"}
+                                  </strong>
+                                  {p.submittedAt && (
+                                    <span className="text-[9px] text-slate-455 block mt-1.5 font-mono">
+                                      Logged: {p.submittedAt}
+                                    </span>
                                   )}
                                 </div>
 
+                                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAdminLedgerAction(p.email, "approve")}
+                                    className="py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[10px] font-extrabold tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1 shadow-xs border-0"
+                                  >
+                                    <CheckCircle className="w-3.5 h-3.5" /> Approve Code
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAdminLedgerAction(p.email, "reject")}
+                                    className="py-2 bg-rose-50 border border-rose-200 hover:bg-rose-100 text-rose-700 rounded-lg text-[10px] font-bold tracking-wider uppercase transition cursor-pointer flex items-center justify-center gap-1 shadow-xs border-0"
+                                  >
+                                    Reject / Clear
+                                  </button>
+                                </div>
                               </div>
-                            ))
+                            );
+                          })
                         )}
                       </div>
                     </div>
 
+                    {/* RIGHT COLUMN (COL-SPAN-7): SYSTEM PATIENTS REGISTRY DATABASE */}
+                    <div className="lg:col-span-7 space-y-4">
+                      
+                      {/* Filter and Search Controls Block */}
+                      <div className="bg-white border border-slate-205 p-4 rounded-2xl flex flex-col sm:flex-row gap-4 items-center justify-between shadow-xs">
+                        
+                        <div className="relative w-full sm:max-w-xs">
+                          <input 
+                            type="text"
+                            placeholder="Search patient record by name, email, concern, or UTR..."
+                            value={adminSearch}
+                            onChange={(e) => setAdminSearch(e.target.value)}
+                            className="w-full text-xs p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-teal-450 focus:bg-white transition outline-none font-semibold text-slate-850"
+                          />
+                          <Search className="absolute left-3 top-3 w-4 h-4 text-slate-455" />
+                        </div>
+
+                        <div className="flex gap-2.5 w-full sm:w-auto shrink-0 justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAdminSearch("");
+                              fetchAdminRecords(sessionId);
+                            }}
+                            className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-700 text-xs font-bold transition flex items-center gap-1.5 cursor-pointer border-0 outline-none"
+                            title="Refresh server record database"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Pull Database</span>
+                          </button>
+                        </div>
+
+                      </div>
+
+                      {/* Patient Ledger table list */}
+                      <div className="bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+                        <div className="bg-slate-100 text-slate-705 px-5 py-3.5 border-b border-slate-200 flex items-center justify-between font-bold text-xs uppercase tracking-wider">
+                          <span>Patient Diagnostics Registry List</span>
+                          <span className="text-[10px] font-mono font-extrabold text-slate-455 tracking-tight italic normal-case">
+                            Showing {adminUsers.filter((u) => {
+                              if (!u) return false;
+                              const q = adminSearch.toLowerCase();
+                              const nameVal = (u.name || "").toLowerCase();
+                              const emailVal = (u.email || "").toLowerCase();
+                              const utrVal = (u.utr || "").toLowerCase();
+                              return nameVal.includes(q) || emailVal.includes(q) || (u.utr && utrVal.includes(q));
+                            }).length} of {adminUsers.length} total profiles
+                          </span>
+                        </div>
+
+                        <div className="p-2 divide-y divide-slate-100 max-h-[515px] overflow-y-auto custom-scrollbar">
+                          {adminUsers.filter((u) => {
+                            if (!u) return false;
+                            const q = adminSearch.toLowerCase();
+                            const nameVal = (u.name || "").toLowerCase();
+                            const emailVal = (u.email || "").toLowerCase();
+                            const utrVal = (u.utr || "").toLowerCase();
+                            const concernVal = (u.concern || "").toLowerCase();
+                            return (
+                              nameVal.includes(q) ||
+                              emailVal.includes(q) ||
+                              (u.utr && utrVal.includes(q)) ||
+                              (u.concern && concernVal.includes(q))
+                            );
+                          }).length === 0 ? (
+                            <div className="py-16 text-center text-slate-400 font-medium">
+                              <Search className="w-8 h-8 text-slate-200 mx-auto mb-2" />
+                              <p className="text-xs font-bold text-slate-500">No matched profiles found</p>
+                              <p className="text-[10px] text-slate-400 mt-1">Refine your active search query parameter and retry filter bounds.</p>
+                            </div>
+                          ) : (
+                            adminUsers
+                              .filter((u) => {
+                                if (!u) return false;
+                                const q = adminSearch.toLowerCase();
+                                const nameVal = (u.name || "").toLowerCase();
+                                const emailVal = (u.email || "").toLowerCase();
+                                const utrVal = (u.utr || "").toLowerCase();
+                                const concernVal = (u.concern || "").toLowerCase();
+                                return (
+                                  nameVal.includes(q) ||
+                                  emailVal.includes(q) ||
+                                  (u.utr && utrVal.includes(q)) ||
+                                  (u.concern && concernVal.includes(q))
+                                );
+                              })
+                              .map((u, idx) => (
+                                <div 
+                                  key={`${u.email}_directory_${idx}`} 
+                                  className="p-5 flex flex-col md:flex-row md:items-center justify-between gap-6 hover:bg-slate-50 transition duration-155 text-left rounded-2xl border border-slate-100 bg-white my-1"
+                                >
+                                  <div className="flex items-start gap-4 flex-1">
+                                    {/* Patient Profile Picture */}
+                                    <div 
+                                      className="w-12 h-12 rounded-full overflow-hidden bg-slate-100 border border-slate-200 shrink-0 cursor-pointer shadow-xs hover:scale-105 transition duration-150"
+                                      onClick={() => u.picture && setSelectedScanImageModal(u.picture)}
+                                      title="Click to zoom profile picture"
+                                    >
+                                      <img 
+                                        src={u.picture || `https://api.dicebear.com/7.x/adventurer/svg?seed=${encodeURIComponent(u.name || "Anon")}`} 
+                                        className="w-full h-full object-cover" 
+                                        alt="Patient profile"
+                                        referrerPolicy="no-referrer"
+                                      />
+                                    </div>
+
+                                    <div className="space-y-1.5 flex-1 min-w-0">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <h5 className="font-extrabold text-slate-900 text-sm md:text-base tracking-tight truncate">{u.name || "Anonymous Patient"}</h5>
+                                        
+                                        {u.paymentVerified ? (
+                                          <span className="text-[9px] font-extrabold bg-emerald-50 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-150 flex items-center gap-1 uppercase tracking-wider">
+                                            <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span> Verified Patient
+                                          </span>
+                                        ) : (
+                                          <span className="text-[9px] font-extrabold bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full border border-amber-150 flex items-center gap-1 uppercase tracking-wider">
+                                            <span className="w-1.5 h-1.5 bg-amber-400 rounded-full"></span> Unverified
+                                          </span>
+                                        )}
+
+                                        {u.email === "gulshankumar9934293812@gmail.com" && (
+                                          <span className="text-[9px] font-extrabold bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full border border-purple-100 uppercase tracking-wider">
+                                            Owner / Admin
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <div className="text-xs text-slate-500 space-y-1">
+                                        <p className="font-mono text-slate-455 select-all truncate font-semibold">{u.email}</p>
+                                        <p className="font-medium text-slate-600">
+                                          Background Profile: <strong className="text-slate-800">Age {u.age || "N/A"}</strong> — Concern: <strong className="text-teal-700 font-extrabold">{u.concern || "None Registered"}</strong>
+                                        </p>
+                                        
+                                        {u.utr && (
+                                          <p className="font-mono bg-slate-100/80 text-slate-750 px-2 py-0.5 rounded-md text-[10px] inline-flex items-center gap-1.5 border border-slate-200">
+                                            <span>Approved UTR:</span> 
+                                            <strong className="text-slate-900 font-extrabold tracking-wider select-all">{u.utr}</strong>
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Patient Scan Snapshot Image Box */}
+                                  <div className="flex items-center gap-5 shrink-0 justify-between w-full md:w-auto pt-3 md:pt-0 border-t md:border-t-0 border-slate-100">
+                                    {u.lastScanImage ? (
+                                      <div className="flex flex-col items-center">
+                                        <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest mb-1">Latest Face Scan</span>
+                                        <div 
+                                          onClick={() => setSelectedScanImageModal(u.lastScanImage)}
+                                          className="w-16 h-16 rounded-2xl border-2 border-teal-200 bg-teal-50/50 flex items-center justify-center overflow-hidden shadow-sm cursor-pointer hover:scale-105 active:scale-95 hover:border-teal-450 transition duration-200"
+                                          title="Click to zoom face scan image"
+                                        >
+                                          <img src={u.lastScanImage} className="w-full h-full object-cover" alt="Last Face Scan" />
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="flex flex-col items-center">
+                                        <span className="text-[9px] text-slate-400 font-extrabold uppercase tracking-widest mb-1">Latest Face Scan</span>
+                                        <div className="w-16 h-16 rounded-2xl border border-slate-200 bg-slate-50 flex flex-col items-center justify-center text-slate-350" title="No scan snapshot recorded yet">
+                                          <Camera className="w-5 h-5 opacity-60" />
+                                          <span className="text-[8px] font-black mt-1 uppercase tracking-tighter">No Scan</span>
+                                        </div>
+                                      </div>
+                                    )}
+
+                                    <div className="flex flex-col items-end gap-1.5 text-right">
+                                      <div className="text-[10px] text-slate-450 font-mono tracking-wider">
+                                        Scans Remaining: <strong className="text-slate-800 font-extrabold text-xs">{u.scansRemaining}</strong>
+                                      </div>
+                                      
+                                      {u.email !== "gulshankumar9934293812@gmail.com" && (
+                                        <div className="flex gap-1.5">
+                                          {u.paymentVerified ? (
+                                            <button 
+                                              onClick={() => handleAdminLedgerAction(u.email, "reject")}
+                                              className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 hover:bg-rose-100 hover:text-rose-700 px-3 py-1.5 rounded-xl transition cursor-pointer"
+                                              title="Revoke active verified access status and require setup again"
+                                            >
+                                              Revoke Verify
+                                            </button>
+                                          ) : (
+                                            <button 
+                                              onClick={() => handleAdminLedgerAction(u.email, "approve")}
+                                              className="text-[10px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-3 py-1.5 rounded-xl transition cursor-pointer border-0"
+                                            >
+                                              Force Verify
+                                            </button>
+                                          )}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                </div>
+                              ))
+                          )}
+                        </div>
+                      </div>
+
+                    </div>
+
+                  </div>
+
+                  {/* Additional Clinical Database logs note card */}
+                  <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-left text-xs leading-relaxed text-slate-600 flex items-start gap-3">
+                    <ShieldAlert className="w-5 h-5 text-teal-600 shrink-0 mt-0.5" />
+                    <div>
+                      <strong className="text-slate-800 block text-xs font-black uppercase tracking-wider mb-1">Administrative Security Protocol Statement</strong>
+                      <span>All digital overrides executed via this clinical console are permanently serialized and bound to the Active Administration session. Approvals will instantly notify the patient's registered visual instance and unlock dynamic camera spectral scanning features. Verified status remains permanently active unless manually revoked or flushed by database cycles.</span>
+                    </div>
                   </div>
 
                 </div>
-
-                {/* Additional Clinical Database logs note card */}
-                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-left text-xs leading-relaxed text-slate-600 flex items-start gap-3">
-                  <ShieldAlert className="w-5 h-5 text-teal-600 shrink-0 mt-0.5" />
-                  <div>
-                    <strong className="text-slate-800 block text-xs font-black uppercase tracking-wider mb-1">Administrative Security Protocol Statement</strong>
-                    <span>All digital overrides executed via this clinical console are permanently serialized and bound to the Active Administration session. Approvals will instantly notify the patient's registered visual instance and unlock dynamic camera spectral scanning features. Verified status remains permanently active unless manually revoked or flushed by database cycles.</span>
+              ) : (
+                <div className="w-full max-w-md mx-auto my-12 bg-white border border-rose-200 rounded-3xl p-8 text-center shadow-lg">
+                  <div className="w-16 h-16 bg-rose-50 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <ShieldAlert className="w-8 h-8 animate-pulse" />
                   </div>
+                  <h3 className="text-xl font-extrabold text-slate-950 mb-2">Access Restrained</h3>
+                  <p className="text-sm text-slate-500 mb-6">
+                    This control ledger is strictly restricted to authenticated medical administration credentials.
+                  </p>
+                  <button 
+                    onClick={() => setView("details")}
+                    className="w-full bg-slate-900 text-white font-bold py-3 rounded-xl hover:bg-slate-800 transition cursor-pointer"
+                  >
+                    Return to Patient Portal
+                  </button>
+                </div>
+              )
+            )}
+
+            {/* VIEW 8: INTERACTIVE WHATSAPP AI BOT PLAYGROUND */}
+            {view === "whatsapp" && (
+              <div id="view-whatsapp" className="w-full max-w-4xl mx-auto space-y-6 animate-fadeIn">
+                
+                {/* Visual Header Banner */}
+                <div className="bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-emerald-550/10 border border-emerald-100 rounded-3xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="flex items-center gap-4 text-center sm:text-left">
+                    <div className="w-12 h-12 rounded-2xl bg-emerald-100 flex items-center justify-center shrink-0 shadow-sm">
+                      <MessageCircle className="w-7 h-7 text-emerald-600" />
+                    </div>
+                    <div>
+                      <h3 className="font-extrabold text-slate-900 text-lg">GlowAI WhatsApp AI Dermatologist Bot</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">Instant skin diagnosis, active product advice, and biological remedies straight to your mobile screen!</p>
+                    </div>
+                  </div>
+                  
+                  <span className="bg-emerald-100 text-emerald-800 border border-emerald-200 text-[10px] font-extrabold px-3.5 py-1.5 rounded-full uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span>Live Bot Engine</span>
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+                  
+                  {/* LEFT DETAILED COLUMN (COL-SPAN-4): HOW TO CONNECT REAL WHATSAPP */}
+                  <div className="lg:col-span-5 space-y-6 text-left">
+                    <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm space-y-5">
+                      <h4 className="text-xs font-black text-slate-900 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-3">
+                        <span>📱 Real-world Integration Guidance</span>
+                      </h4>
+
+                      <div className="space-y-4 text-xs leading-relaxed text-slate-650">
+                        <p>
+                          GlowAI possesses a robust server-side WhatsApp dispatch mechanism already bound to phone number <strong className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-800 font-bold">+916201186100</strong>. It automatically sends alerts when:
+                        </p>
+                        
+                        <ul className="space-y-2.5 list-none pl-0">
+                          <li className="flex items-start gap-2">
+                            <span className="text-emerald-500 font-bold">✔</span>
+                            <span>A patient submits a setup fee (notifying the admin with the exact payment UTR).</span>
+                          </li>
+                          <li className="flex items-start gap-2">
+                            <span className="text-emerald-500 font-bold">✔</span>
+                            <span>A clinical audit report is compiled by the multi-spectral computer scanner.</span>
+                          </li>
+                        </ul>
+
+                        <div className="bg-slate-50 border border-slate-150 rounded-2xl p-4 space-y-3 mt-4">
+                          <span className="text-[10px] font-black uppercase text-emerald-700 tracking-wider block">⚡ Run a Test Notification Trigger</span>
+                          <p className="text-[11px] text-slate-500">
+                            Send direct verification ping alert details payload containing your active credentials (<strong>{user?.name || fullName}</strong>) over to WhatsApp support line:
+                          </p>
+                          
+                          <a 
+                            href={`https://api.whatsapp.com/send?phone=916201186100&text=${encodeURIComponent(`[GlowAI System Trigger Ping]\nPatient Name: ${user?.name || fullName}\nConcern: ${user?.concern || concern}\nSession: ${sessionId}\nRequest: Instant AI Bot analysis check.`)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center gap-2 w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-xl text-xs transition"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>Ping WhatsApp Number</span>
+                          </a>
+                        </div>
+
+                        <div className="border-t border-slate-100 pt-4 text-[11px] text-slate-450 italic">
+                          💡 You can configure CallMeBot WhatsApp API Key inside <code>/server.ts</code> line 359 to forward automated custom alerts straight to your own personal phone device!
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Hinglish Quick FAQ */}
+                    <div className="bg-white rounded-3xl p-6 border border-slate-200 shadow-sm text-left">
+                      <span className="text-[10px] font-black uppercase text-emerald-700 bg-emerald-50 border border-emerald-100 px-2.5 py-1 rounded-md tracking-wider inline-block">💬 Hindi User FAQ</span>
+                      <h4 className="font-extrabold text-slate-900 text-sm tracking-tight mt-3">Mera WhatsApp Bot Kaise Use Karein?</h4>
+                      <p className="text-xs text-slate-500 leading-relaxed mt-2.5">
+                        Aap side me diye gye mobile pane me apne skin questions Hindi ya Hinglish me type karein (Jaise: <em>"Dry wrinkles ke liye kya lagayein?"</em>). 
+                      </p>
+                      <p className="text-xs text-slate-500 leading-relaxed mt-2">
+                        Humara server-side Gemini Clinical Agent aapko turant direct message reply formulate karke ek dum fresh dynamic morning AM & evening PM routing suggest karega!
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* RIGHT COLUMN (COL-SPAN-7): INTERACTIVE HIGH FIDELITY MOBILE PHONE CHAT FRAME */}
+                  <div className="lg:col-span-7 flex flex-col items-center">
+                    
+                    {/* The WhatsApp Mobile phone Mockup Frame */}
+                    <div className="w-full max-w-sm rounded-[2.5rem] border-8 border-slate-900 bg-slate-950 shadow-2xl overflow-hidden relative flex flex-col">
+                      
+                      {/* Top Mobile Notch */}
+                      <div className="absolute top-0 inset-x-0 h-4 bg-slate-900 flex justify-center items-center z-20">
+                        <div className="w-16 h-3.5 bg-black rounded-b-xl"></div>
+                      </div>
+
+                      {/* WhatsApp Header block */}
+                      <div className="bg-[#075E54] text-white pt-6 pb-3 px-4 flex items-center justify-between shrink-0 select-none z-10 shadow-md">
+                        <div className="flex items-center gap-2.5 mt-1">
+                          {/* Back sign */}
+                          <span className="text-sm font-bold opacity-80 cursor-pointer">←</span>
+                          {/* Doctor Bot Avatar */}
+                          <div className="w-9 h-9 rounded-full bg-white flex items-center justify-center text-slate-800 font-extrabold shrink-0 border border-emerald-100/30 overflow-hidden shadow-inner">
+                            <img src="https://api.dicebear.com/7.x/bottts/svg?seed=glowai_dermatology_bot" alt="Dr. Bot" className="w-full h-full object-cover scale-110" />
+                          </div>
+                          <div className="text-left leading-tight">
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs font-bold tracking-wide">GlowAI Bot</span>
+                              {/* Verified green shield tick badge */}
+                              <span className="inline-block text-[8px] bg-emerald-500 text-white p-0.5 rounded-full" title="Verified Skincare Specialist">✓</span>
+                            </div>
+                            <span className="text-[10px] text-teal-200 block font-light flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                              online
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Visual helper call and menu buttons */}
+                        <div className="flex gap-3 text-slate-200 text-sm mt-1">
+                          <span className="cursor-pointer hover:text-white">📞</span>
+                          <span className="cursor-pointer hover:text-white">⋮</span>
+                        </div>
+                      </div>
+
+                      {/* WhatsApp Chat messages wall */}
+                      <div className="h-96 overflow-y-auto p-3.5 bg-[#efeae2]/90 space-y-3.5 flex flex-col custom-scrollbar relative">
+                        {/* Elegant background grid overlay */}
+                        <div className="absolute inset-0 opacity-[0.03] bg-[radial-gradient(#000_1px,transparent_1px)] [background-size:16px_16px] pointer-events-none"></div>
+                        
+                        {whatsappMessages.map((msg) => {
+                          if (msg.sender === "system") {
+                            return (
+                              <div key={msg.id} className="text-center z-10 my-0.5">
+                                <span className="inline-block bg-[#ffe082]/75 text-slate-800 text-[9px] font-bold py-1 px-3 rounded-lg shadow-2xs max-w-[90%] font-mono leading-normal">
+                                  {msg.text}
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          const isUser = msg.sender === "user";
+                          return (
+                            <div 
+                              key={msg.id} 
+                              className={`z-10 p-3 rounded-2xl shadow-2xs text-xs max-w-[85%] text-left leading-normal flex flex-col justify-between ${
+                                isUser 
+                                  ? "bg-[#dcf8c6] text-slate-800 ml-auto rounded-tr-none animate-fadeIn" 
+                                  : "bg-white text-slate-800 rounded-tl-none animate-fadeIn"
+                              }`}
+                            >
+                              <div className="whitespace-pre-wrap font-sans font-medium text-[11.5px] leading-relaxed break-words">
+                                {msg.text.split("\n").map((line, idx) => {
+                                  // Formatting whatsapp-style *bold* tags on line values safely
+                                  let formattedLine = line;
+                                  formattedLine = formattedLine.replace(/\*([^*]+)\*/g, "<strong>$1</strong>");
+                                  return <p key={idx} dangerouslySetInnerHTML={{ __html: formattedLine }} className="min-h-3" />;
+                                })}
+                              </div>
+                              <span className="text-[8px] text-slate-400 font-mono tracking-widest uppercase self-end mt-1.5">
+                                {msg.time} {isUser && <span className="text-sky-500 ml-0.5">✓✓</span>}
+                              </span>
+                            </div>
+                          );
+                        })}
+
+                        {/* Chat Bot logic is calculating model response */}
+                        {whatsappLoading && (
+                          <div className="bg-white text-slate-800 rounded-2xl rounded-tl-none p-3.5 shadow-2xs text-xs max-w-[80%] text-left inline-flex items-center gap-2 animate-pulse self-start z-10 transition">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600 shrink-0" />
+                            <span className="font-mono text-[10px] text-slate-450 font-bold uppercase tracking-wider">Dr. GlowAI Bot is typing...</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* WhatsApp Input panel */}
+                      <form 
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleSendWhatsAppChat();
+                        }}
+                        className="bg-[#f0f0f0] p-2.5 flex gap-2 items-center shrink-0 border-t border-slate-205 z-10"
+                      >
+                        <input 
+                          type="text" 
+                          required
+                          value={whatsappInput}
+                          onChange={(e) => setWhatsappInput(e.target.value)}
+                          placeholder="Type skincare query..."
+                          disabled={whatsappLoading}
+                          className="flex-1 py-2 px-3.5 bg-white border border-slate-200 outline-none rounded-full text-xs text-slate-800 placeholder-slate-400 focus:ring-1 focus:ring-emerald-600 transition"
+                        />
+                        
+                        <button 
+                          type="submit" 
+                          disabled={!whatsappInput.trim() || whatsappLoading}
+                          className="rounded-full w-9 h-9 bg-[#128c7e] hover:bg-[#075e54] text-white flex items-center justify-center shrink-0 shadow-sm transition disabled:opacity-45 outline-none border-0 select-none cursor-pointer"
+                        >
+                          <Send className="w-4 h-4 shrink-0" />
+                        </button>
+                      </form>
+
+                    </div>
+
+                    {/* Pre-defined Hinglish prompt chips */}
+                    <div className="mt-4 flex flex-wrap gap-2 justify-center max-w-sm">
+                      {[
+                        { text: "Face par pimples help", label: "🔥 Acne Solution" },
+                        { text: "Dry wrinkles routine", label: "💧 Dry Skin Care" },
+                        { text: "Dull skin spots care", label: "☀️ Dark Spots" }
+                      ].map((item, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => {
+                            if (!whatsappLoading) {
+                              setWhatsappInput(item.text);
+                            }
+                          }}
+                          className="px-3 py-1.5 bg-white hover:bg-emerald-50 hover:border-emerald-250 border border-slate-200 text-slate-650 rounded-full text-[10px] font-bold transition shadow-2xs shrink-0 cursor-pointer"
+                        >
+                          {item.label}
+                        </button>
+                      ))}
+                    </div>
+
+                  </div>
+
                 </div>
 
               </div>
@@ -2579,6 +3245,222 @@ export default function App() {
             <span>Secure SSL Encrypted</span>
           </div>
         </footer>
+
+        {/* Floating Share App Button */}
+        <button
+          type="button"
+          onClick={() => setShowShareModal(true)}
+          className="fixed bottom-6 right-6 z-40 bg-teal-600 hover:bg-teal-700 text-white rounded-full p-3.5 shadow-xl transition-all duration-300 hover:scale-[1.08] flex items-center justify-center cursor-pointer border-0 outline-none hover:shadow-teal-500/20 animate-bounce"
+          title="Share GlowAI Platform"
+        >
+          <Share2 className="w-5 h-5 shrink-0" />
+          <span className="text-[10px] font-bold tracking-wider uppercase pl-1.5 pr-1 hidden sm:inline">Share App</span>
+        </button>
+
+        {/* SHARE APP DIALOG OVERLAY */}
+        {showShareModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/65 backdrop-blur-xs animate-fadeIn">
+            <div className="bg-white rounded-3xl w-full max-w-md p-6 border border-slate-200 shadow-2xl relative text-left mx-4 text-slate-850">
+              
+              {/* Header indicator */}
+              <div className="flex justify-between items-center pb-4 border-b border-slate-100">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-lg bg-teal-50 flex items-center justify-center">
+                    <Share2 className="w-4 h-4 text-teal-650" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-sm text-slate-900 font-sans tracking-tight">Share GlowAI Platform</h3>
+                    <p className="text-[10px] text-slate-450">Invite friends & family to scan their skin!</p>
+                  </div>
+                </div>
+                <button 
+                  type="button"
+                  onClick={() => setShowShareModal(false)}
+                  className="text-slate-400 hover:text-slate-700 font-black text-xl hover:bg-slate-150 h-8 w-8 rounded-full flex items-center justify-center transition cursor-pointer bg-transparent border-0 outline-none"
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Share platform grid */}
+              <div className="py-5 space-y-4">
+                <p className="text-xs text-slate-500 font-medium">GlowAI platform ko separate channels ya friends ke saath share karein:</p>
+                
+                <div className="grid grid-cols-3 gap-2.5">
+                  {/* WhatsApp */}
+                  <a 
+                    href={`https://api.whatsapp.com/send?text=${encodeURIComponent("Namaste! Main apne acne and dry skin care routine ke liye GlowAI App recommend kar raha hu. Isme high-tech live AI Skin Scanning aur personalized dermatologist advice milti hai, check out: https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center justify-center p-3 rounded-2xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-100/60 transition text-center group no-underline"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center text-lg mb-1.5 shadow-sm group-hover:scale-105 transition-all">
+                      💬
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-700">WhatsApp</span>
+                  </a>
+
+                  {/* Telegram */}
+                  <a 
+                    href={`https://t.me/share/url?url=${encodeURIComponent("https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app")}&text=${encodeURIComponent("Check out GlowAI! A high-tech AI Skin Scanner that builds custom dermatology guided skincare remedies.")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center justify-center p-3 rounded-2xl bg-sky-50 hover:bg-sky-100 border border-sky-100/60 transition text-center group no-underline"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-sky-500 text-white flex items-center justify-center text-sm mb-1.5 shadow-sm group-hover:scale-105 transition-all">
+                      ✈
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-700">Telegram</span>
+                  </a>
+
+                  {/* X / Twitter */}
+                  <a 
+                    href={`https://twitter.com/intent/tweet?text=${encodeURIComponent("Scanned my skin using GlowAI, the custom dermatologist model! Check out your skin report here:")}&url=${encodeURIComponent("https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center justify-center p-3 rounded-2xl bg-slate-900 hover:bg-slate-850 text-white border border-slate-950 transition text-center group no-underline"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-slate-800 text-white flex items-center justify-center text-xs mb-1.5 shadow-sm group-hover:scale-105 transition-all font-mono font-black">
+                      X
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-200">Twitter / X</span>
+                  </a>
+
+                  {/* Facebook */}
+                  <a 
+                    href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent("https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center justify-center p-3 rounded-2xl bg-indigo-50 hover:bg-indigo-100 border border-indigo-100/60 transition text-center group no-underline"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-indigo-600 text-white flex items-center justify-center text-sm mb-1.5 shadow-sm group-hover:scale-105 transition-all">
+                      f
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-700">Facebook</span>
+                  </a>
+
+                  {/* LinkedIn */}
+                  <a 
+                    href={`https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent("https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app")}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex flex-col items-center justify-center p-3 rounded-2xl bg-blue-50 hover:bg-blue-100 border border-blue-100/60 transition text-center group no-underline"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-blue-700 text-white flex items-center justify-center text-xs mb-1.5 shadow-sm group-hover:scale-105 transition-all">
+                      in
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-700">LinkedIn</span>
+                  </a>
+
+                  {/* Native Mobile Share */}
+                  <button 
+                    type="button"
+                    onClick={handleNativeShare}
+                    className="flex flex-col items-center justify-center p-3 rounded-2xl bg-teal-50 hover:bg-teal-100 border border-teal-100/60 transition text-center group cursor-pointer outline-none border-0"
+                  >
+                    <div className="w-10 h-10 rounded-full bg-teal-600 text-white flex items-center justify-center text-xs mb-1.5 shadow-sm group-hover:scale-105 transition-all">
+                      🔗
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-700">Other Share</span>
+                  </button>
+                </div>
+
+                {/* Copyable text space */}
+                <div className="space-y-1.5 pt-3.5 border-t border-slate-100">
+                  <span className="text-[10px] font-black text-slate-450 uppercase tracking-widest block">Copy Link Share</span>
+                  <div className="flex gap-2 bg-slate-50 border border-slate-200 rounded-xl p-1.5 items-center">
+                    <span className="text-[11px] font-mono font-bold text-slate-600 truncate flex-1 px-2 text-left">
+                      https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app
+                    </span>
+                    <button 
+                      type="button"
+                      onClick={handleCopyLink}
+                      className="bg-slate-900 hover:bg-slate-800 text-white rounded-lg px-3 py-1.5 text-[11px] font-bold transition flex items-center gap-1.5 shrink-0 cursor-pointer outline-none border-0"
+                    >
+                      {copiedLink ? (
+                        <>
+                          <Check className="w-3 h-3 text-teal-400" />
+                          <span>Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          <span>Copy</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* QR Code section */}
+              <div className="bg-slate-50 border border-slate-150 rounded-2xl p-4 flex gap-4 items-center">
+                <div className="w-14 h-14 bg-white p-1 rounded-lg border border-slate-250 shrink-0 select-none">
+                  <img 
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent("https://ais-pre-ircpwuehdczjjtvto6qsow-649656015455.asia-southeast1.run.app")}`} 
+                    alt="QR Share" 
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+                <div className="text-left leading-normal">
+                  <span className="text-[9px] font-black uppercase text-teal-700 bg-teal-50 border border-teal-150 px-2 py-0.5 rounded tracking-wider inline-block">Mobile Link QR</span>
+                  <p className="text-[10px] text-slate-500 mt-1 font-semibold leading-relaxed">Apne mobile se scan karke directly skin diagnostic scanner use karein.</p>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        )}
+
+        {/* LIGHTBOX FOR PROFILE PHOTO / SKIN SCAN PREVIEW */}
+        {selectedScanImageModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/80 backdrop-blur-md animate-fadeIn">
+            <div className="bg-white rounded-3xl w-full max-w-2xl p-6 border border-slate-200 shadow-2xl relative text-left mx-4 text-slate-850">
+              
+              <div className="flex justify-between items-center pb-3.5 border-b border-slate-100 mb-4">
+                <h3 className="font-extrabold text-sm text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-teal-500 animate-pulse"></span>
+                  High-Resolution Visual Inspection
+                </h3>
+                <button 
+                  type="button"
+                  onClick={() => setSelectedScanImageModal(null)}
+                  className="text-slate-400 hover:text-slate-700 font-black text-xl hover:bg-slate-150 h-8 w-8 rounded-full flex items-center justify-center transition cursor-pointer bg-transparent border-0 outline-none"
+                >
+                  ×
+                </button>
+              </div>
+
+              <div className="w-full h-96 rounded-2xl bg-slate-950 flex items-center justify-center overflow-hidden border border-slate-200 shadow-inner">
+                <img src={selectedScanImageModal} className="max-w-full max-h-full object-contain" alt="Enlarged visual diagnostic" />
+              </div>
+
+              <div className="mt-4 pt-4 border-t border-slate-100 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const link = document.createElement("a");
+                    link.href = selectedScanImageModal;
+                    link.download = "glowai_clinical_image.jpg";
+                    link.click();
+                  }}
+                  className="bg-slate-900 hover:bg-slate-800 text-white rounded-xl px-4 py-2 text-xs font-black transition cursor-pointer"
+                >
+                  Download Image File
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedScanImageModal(null)}
+                  className="border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-xl px-4 py-2 text-xs font-black transition cursor-pointer"
+                >
+                  Close Inspection
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
 
       </main>
     </div>
