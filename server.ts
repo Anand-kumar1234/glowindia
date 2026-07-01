@@ -3,6 +3,8 @@ import path from "path";
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import { initializeApp } from "firebase/app";
+import { getFirestore, collection, doc, getDocs, setDoc, deleteDoc, getDoc } from "firebase/firestore";
 
 dotenv.config();
 
@@ -90,7 +92,24 @@ const SESSIONS_FILE = path.join(STORAGE_DIR, "sessions.json");
 const PENDING_PAYMENTS_FILE = path.join(STORAGE_DIR, "pending_payments.json");
 const VERIFIED_UTRS_FILE = path.join(STORAGE_DIR, "verified_utrs.json");
 
+// --- FIREBASE INITIALIZATION ---
+let db: any = null;
+try {
+  const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+  if (fs.existsSync(configPath)) {
+    const fbConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    const firebaseApp = initializeApp(fbConfig);
+    db = getFirestore(firebaseApp, fbConfig.firestoreDatabaseId || "(default)");
+    console.log("🔥 [Firebase]: Connected successfully to Cloud Firestore via Client SDK.");
+  } else {
+    console.warn("⚠️ Firebase configuration file not found, using local files only.");
+  }
+} catch (err) {
+  console.error("❌ Failed to initialize Firebase:", err);
+}
+
 function saveDb() {
+  // 1. Always save locally as a reliable fallback/cache
   try {
     fs.writeFileSync(USERS_DB_FILE, JSON.stringify(usersDb, null, 2), "utf8");
     fs.writeFileSync(SESSIONS_FILE, JSON.stringify(sessions, null, 2), "utf8");
@@ -100,9 +119,58 @@ function saveDb() {
   } catch (err) {
     console.warn("⚠️ Failed to autosave variables to disk:", err);
   }
+
+  // 2. Commit updates to Firebase Firestore asynchronously
+  if (db) {
+    console.log("🔥 [Firebase]: Committing updates to Cloud Firestore...");
+
+    // Save users
+    Object.keys(usersDb).forEach(email => {
+      const userRef = doc(db, "users", email);
+      setDoc(userRef, usersDb[email]).catch(err => {
+        console.error(`❌ [Firebase Error]: Failed to save user ${email} to Firestore:`, err);
+      });
+    });
+
+    // Save sessions
+    Object.keys(sessions).forEach(sessId => {
+      const sessRef = doc(db, "sessions", sessId);
+      setDoc(sessRef, sessions[sessId]).catch(err => {
+        console.error(`❌ [Firebase Error]: Failed to save session ${sessId} to Firestore:`, err);
+      });
+    });
+
+    // Save pending payments
+    Object.keys(pendingPayments).forEach(sessId => {
+      const pendingRef = doc(db, "pendingPayments", sessId);
+      setDoc(pendingRef, pendingPayments[sessId]).catch(err => {
+        console.error(`❌ [Firebase Error]: Failed to save pending payment ${sessId} to Firestore:`, err);
+      });
+    });
+
+    // Handle completed or rejected payments deletions from Firestore
+    getDocs(collection(db, "pendingPayments")).then(snapshot => {
+      snapshot.forEach(docSnap => {
+        if (!pendingPayments[docSnap.id]) {
+          deleteDoc(doc(db, "pendingPayments", docSnap.id)).catch(err => {
+            console.error(`❌ [Firebase Error]: Failed to delete stale pending payment ${docSnap.id}:`, err);
+          });
+        }
+      });
+    }).catch(err => {
+      console.error("❌ [Firebase Error]: Failed to sync deletions of pending payments:", err);
+    });
+
+    // Save verified UTRs
+    const configRef = doc(db, "system", "config");
+    setDoc(configRef, { verifiedUTRs: Array.from(verifiedUTRs) }).catch(err => {
+      console.error("❌ [Firebase Error]: Failed to save system config to Firestore:", err);
+    });
+  }
 }
 
-function loadDb() {
+async function loadDb() {
+  // 1. Read from local disk baseline/seeded data first
   try {
     if (fs.existsSync(USERS_DB_FILE)) {
       const data = fs.readFileSync(USERS_DB_FILE, "utf8");
@@ -133,10 +201,43 @@ function loadDb() {
   } catch (err) {
     console.warn("⚠️ Failed to load database files from disk:", err);
   }
-}
 
-// Immediately load database records on application startup
-loadDb();
+  // 2. Synchronize/enrich with real-time Firestore database
+  if (db) {
+    try {
+      console.log("🔥 [Firebase]: Querying Firestore collections...");
+      
+      const usersSnapshot = await getDocs(collection(db, "users"));
+      usersSnapshot.forEach((docSnap) => {
+        usersDb[docSnap.id] = docSnap.data() as UserProfile;
+      });
+      console.log(`🔥 [Firebase]: Loaded ${usersSnapshot.size} user profiles from Cloud Firestore.`);
+
+      const sessionsSnapshot = await getDocs(collection(db, "sessions"));
+      sessionsSnapshot.forEach((docSnap) => {
+        sessions[docSnap.id] = docSnap.data() as Session;
+      });
+      console.log(`🔥 [Firebase]: Loaded ${sessionsSnapshot.size} active sessions from Cloud Firestore.`);
+
+      const pendingSnapshot = await getDocs(collection(db, "pendingPayments"));
+      pendingSnapshot.forEach((docSnap) => {
+        pendingPayments[docSnap.id] = docSnap.data() as PendingPayment;
+      });
+      console.log(`🔥 [Firebase]: Loaded ${pendingSnapshot.size} pending payments from Cloud Firestore.`);
+
+      const systemDocSnap = await getDoc(doc(db, "system", "config"));
+      if (systemDocSnap.exists()) {
+        const sysData = systemDocSnap.data();
+        if (sysData && Array.isArray(sysData.verifiedUTRs)) {
+          sysData.verifiedUTRs.forEach((utr: string) => verifiedUTRs.add(utr));
+          console.log(`🔥 [Firebase]: Synced ${sysData.verifiedUTRs.length} verified UTRs from Cloud Firestore.`);
+        }
+      }
+    } catch (err) {
+      console.error("❌ [Firebase Error]: Failed to load database from Cloud Firestore:", err);
+    }
+  }
+}
 
 // Express interceptor middleware to automatically save databases on successful POST/action mutations (including registration & auth)
 app.use((req, res, next) => {
@@ -1167,6 +1268,14 @@ Rules for responses:
 
 // --- INTEGRATE VITE FOR FE ASSET SERVING ---
 async function startServer() {
+  // Load databases asynchronously from Cloud Firestore (with local JSON fallback) on startup
+  try {
+    await loadDb();
+    console.log("✅ [GlowAI Startup]: Database synchronization completed successfully.");
+  } catch (err) {
+    console.error("❌ [GlowAI Startup Error]: Database synchronization failed during startup:", err);
+  }
+
   if (process.env.NODE_ENV !== "production") {
     // Development mode
     const { createServer: createViteServer } = await import("vite");
