@@ -470,9 +470,22 @@ export default function App() {
                 .catch((err) => console.log("Silent probe skipped:", err));
               setView("details");
             }
+          } else {
+            // Clean up stale session since it does not exist on the server
+            localStorage.removeItem("glowai_sess");
+            setUser(null);
+            setSessionId("");
+            setView("signin");
           }
         })
-        .catch((e) => console.error("Session restoration error", e));
+        .catch((e) => {
+          console.error("Session restoration error", e);
+          // Clean up local session on connection error/invalid state as well
+          localStorage.removeItem("glowai_sess");
+          setUser(null);
+          setSessionId("");
+          setView("signin");
+        });
     }
   }, []);
 
@@ -916,6 +929,13 @@ export default function App() {
 
       const responseData = await response.json();
       if (!response.ok) {
+        if (response.status === 401) {
+          // Stale session detected, reset local credentials and redirect
+          localStorage.removeItem("glowai_sess");
+          setUser(null);
+          setSessionId("");
+          setView("signin");
+        }
         throw new Error(responseData.error || "Epidermal model analysis failed");
       }
 
