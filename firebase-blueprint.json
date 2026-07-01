@@ -1,0 +1,173 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile document containing registration, authentication status, and personal details.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "description": "Unique email address of the user"
+        },
+        "password": {
+          "type": "string",
+          "description": "Hashed password for email signups"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name of the user"
+        },
+        "picture": {
+          "type": "string",
+          "description": "Profile picture URL or base64 data"
+        },
+        "age": {
+          "type": "integer",
+          "description": "Age of the user"
+        },
+        "concern": {
+          "type": "string",
+          "description": "User skincare concerns"
+        },
+        "paymentVerified": {
+          "type": "boolean",
+          "description": "Whether the user's scan access payment has been verified"
+        },
+        "utr": {
+          "type": "string",
+          "description": "Unified Transaction Reference submitted by the user"
+        },
+        "scansRemaining": {
+          "type": "integer",
+          "description": "Number of remaining AI scans allowed"
+        },
+        "lastScanImage": {
+          "type": "string",
+          "description": "Base64 or URL of the last scan image"
+        }
+      },
+      "required": ["email", "name"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "Active tracking session of a user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique session ID"
+        },
+        "name": {
+          "type": "string",
+          "description": "User name in session"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email in session"
+        },
+        "picture": {
+          "type": "string",
+          "description": "User profile picture"
+        },
+        "age": {
+          "type": "integer",
+          "description": "User age in session"
+        },
+        "concern": {
+          "type": "string",
+          "description": "User concern in session"
+        },
+        "paymentVerified": {
+          "type": "boolean",
+          "description": "Payment verification status"
+        },
+        "utr": {
+          "type": "string",
+          "description": "User UTR in session"
+        },
+        "scansRemaining": {
+          "type": "integer",
+          "description": "Scans remaining"
+        },
+        "lastScanImage": {
+          "type": "string",
+          "description": "Last scan image"
+        }
+      },
+      "required": ["id", "email", "paymentVerified"]
+    },
+    "PendingPayment": {
+      "title": "PendingPayment",
+      "description": "Pending skin scan verification transactions.",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Session ID linked to the payment"
+        },
+        "utr": {
+          "type": "string",
+          "description": "Submitted UTR"
+        },
+        "email": {
+          "type": "string",
+          "description": "Payer email address"
+        },
+        "name": {
+          "type": "string",
+          "description": "Payer name"
+        },
+        "age": {
+          "type": "integer",
+          "description": "Payer age"
+        },
+        "concern": {
+          "type": "string",
+          "description": "Payer skincare concern"
+        },
+        "submittedAt": {
+          "type": "integer",
+          "description": "Unix timestamp of submission"
+        },
+        "autoApproveAt": {
+          "type": "integer",
+          "description": "Unix timestamp for automatic completion fallback"
+        },
+        "completed": {
+          "type": "boolean",
+          "description": "Whether payment has been verified/processed"
+        }
+      },
+      "required": ["sessionId", "utr", "email", "name", "submittedAt", "completed"]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "Global config values like verified UTRs.",
+      "type": "object",
+      "properties": {
+        "verifiedUTRs": {
+          "type": "array",
+          "description": "List of already processed/verified UTRs"
+        }
+      }
+    }
+  },
+  "firestore": {
+    "users/{email}": {
+      "schema": "UserProfile",
+      "description": "User profile collection by email"
+    },
+    "sessions/{sessionId}": {
+      "schema": "Session",
+      "description": "User active sessions"
+    },
+    "pendingPayments/{sessionId}": {
+      "schema": "PendingPayment",
+      "description": "Pending manual verifications"
+    },
+    "system/config": {
+      "schema": "SystemConfig",
+      "description": "Global system configuration document"
+    }
+  }
+}
